@@ -1,0 +1,46 @@
+# ============================================================
+# EduGenAI - Python Dependencies
+# ============================================================
+
+# ── Web Framework ───────────────────────────────────────────
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+python-dotenv==1.1.0
+
+# ── AI / ML ─────────────────────────────────────────────────
+google-generativeai==0.8.5
+transformers==4.51.3
+torch==2.7.0
+sentencepiece>=0.2.0
+
+# ── OCR / Document Reader ───────────────────────────────────
+pytesseract
+Pillow
+PyMuPDF==1.25.5
+python-docx
+python-pptx
+
+# ── Audio Input ─────────────────────────────────────────────
+openai-whisper
+
+# ── Knowledge Base ──────────────────────────────────────────
+wikipedia
+
+# ── Translation ─────────────────────────────────────────────
+deep-translator==1.11.4
+
+# ── Text-to-Speech ──────────────────────────────────────────
+gTTS==2.5.1
+
+# ── Video Generation ───────────────────────────────────────
+moviepy==1.0.3
+opencv-python
+librosa
+duckduckgo-search
+
+# ── Utilities ───────────────────────────────────────────────
+aiofiles==24.1.0
+pydantic==2.11.1
+httpx==0.28.1
+groq==1.2.0

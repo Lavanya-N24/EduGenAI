@@ -1,0 +1,49 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.py[cod]
+backend/*.so
+backend/.env
+
+# Data/Output
+backend/outputs/
+backend/uploads/
+backend/models/
+
+# Flutter
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.pub-cache/
+flutter_app/.server/
+flutter_app/build/
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Crash logs
+hs_err_pid*.log
+replay_pid*.log
+
+# Logs
+error.log
+
+
+# SadTalker weights (large files)
+backend/sadtalker/
+
+
+# Large trained model weights (>100MB - use Git LFS or external storage)
+*.safetensors
+*.bin
+optimizer.pt
+rng_state.pth
+scheduler.pt
+training_args.bin
+
