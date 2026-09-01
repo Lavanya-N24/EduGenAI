@@ -28,12 +28,15 @@ from utils.file_handler import handle_uploaded_file
 from utils.helpers import generate_job_id
 from models.response_models import GenerateResponse, OCRResponse
 
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/generate", tags=["Generate"])
 
 
 @router.post("/full-pipeline", response_model=GenerateResponse)
 async def full_pipeline(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     text: Optional[str] = Form(None),
     target_language: str = Form("en"),
@@ -41,6 +44,33 @@ async def full_pipeline(
     learning_mode: str = Form("beginner"),
     user_id: str = Form("default_user"),
 ):
+    # Support JSON requests
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                text = body.get("text", text)
+                target_language = body.get("target_language", target_language)
+                generate_video_flag = body.get("generate_video_flag", generate_video_flag)
+                learning_mode = body.get("learning_mode", learning_mode)
+                user_id = body.get("user_id", user_id)
+        except Exception:
+            pass
+
+    # Ensure clean types
+    if not isinstance(target_language, str) or not target_language.strip():
+        target_language = "en"
+    if not isinstance(learning_mode, str) or not learning_mode.strip():
+        learning_mode = "beginner"
+    if not isinstance(user_id, str) or not user_id.strip():
+        user_id = "default_user"
+    if not isinstance(text, str):
+        text = None
+    if isinstance(generate_video_flag, str):
+        generate_video_flag = str(generate_video_flag).lower() in ("true", "1", "yes")
+    elif not isinstance(generate_video_flag, bool):
+        generate_video_flag = True
     """
     🚀 MAIN ENDPOINT: Complete content-to-video pipeline.
 
@@ -88,9 +118,11 @@ async def full_pipeline(
 
     logger.info(f"[{job_id}] Step 1 complete: Extracted {len(content)} chars via {input_type}")
 
-    # ── Step 1.05: Knowledge Base Enrichment ────────────────
+    # ── Step 1.05: Knowledge Base & Wikipedia Research ────
     kb_result = await enrich_with_knowledge_base(content)
     enriched_content = kb_result["enriched_text"]
+    wiki_data = kb_result.get("wikipedia_data") or {}
+    research_context = wiki_data.get("research_context", "")
     if kb_result["was_enriched"]:
         logger.info(f"[{job_id}] Step 1.05 complete: Enriched via {kb_result['source']}")
 
@@ -104,10 +136,15 @@ async def full_pipeline(
     summarized_text = summary_result["summary"]
     logger.info(f"[{job_id}] Step 1.2 complete: Summarized text ({summary_result['compression_ratio']*100:.1f}% compression)")
 
-    # ── Step 2: Generate Scenes (LLM) ──────────────────────
+    # ── Step 2: Generate Dynamic Scenes (Groq Director) ───
     language_name = SUPPORTED_LANGUAGES.get(target_language, "English")
-    scenes = await generate_scenes(summarized_text, language_name, learning_mode)
-    logger.info(f"[{job_id}] Step 2 complete: {scenes.get('total_scenes', 0)} scenes generated [{learning_mode}]")
+    scenes = await generate_scenes(
+        content=summarized_text,
+        language=language_name,
+        learning_mode=learning_mode,
+        research_context=research_context,
+    )
+    logger.info(f"[{job_id}] Step 2 complete: {scenes.get('total_scenes', len(scenes.get('scenes', [])))} dynamic scenes generated [{learning_mode}]")
 
     # ── Steps 2.1 + 3 in PARALLEL (quiz + emotions don't depend on each other)
     import asyncio as _asyncio
@@ -155,6 +192,68 @@ async def full_pipeline(
         )
         video_result["video_record_id"] = vid_record["id"]
         video_result["share_token"] = vid_record["share_token"]
+        video_result["url"] = f"http://127.0.0.1:8000/videos/{video_result['filename']}"
+        video_result["video_url"] = video_result["url"]
+
+    # ── Step 7.2: Generate Comprehensive Text Article ────
+    scene_list = scenes.get("scenes", [])
+    sections = []
+    equations = []
+    key_takeaways = []
+
+    for i, s in enumerate(scene_list):
+        s_title = s.get("title", f"Section {i+1}")
+        s_narration = s.get("narration") or s.get("text", "")
+        s_trans = s.get("transition_explanation", "")
+        s_eq = s.get("equation", "")
+        if s_eq and s_eq not in equations:
+            equations.append(s_eq)
+
+        sections.append({
+            "section_id": i + 1,
+            "title": s_title,
+            "content": s_narration,
+            "transition": s_trans,
+            "equation": s_eq,
+            "visual_concept": s.get("visual_description", ""),
+        })
+        if len(s_narration) > 10:
+            key_takeaways.append(f"{s_title}: {s_narration}")
+
+    # Build Markdown document
+    article_title = scenes.get("title", content[:40] or "Educational Lesson")
+    article_summary = scenes.get("summary", summarized_text[:200] or "")
+    md_lines = [
+        f"# {article_title}\n",
+        f"**Overview:** {article_summary}\n",
+    ]
+    if wiki_data and wiki_data.get("extract"):
+        md_lines.append(f"> 📖 **Factual Background (Wikipedia):** {wiki_data['extract']}\n")
+
+    for sec in sections:
+        md_lines.append(f"## {sec['section_id']}. {sec['title']}")
+        if sec['transition']:
+            md_lines.append(f"*Concept Context:* {sec['transition']}")
+        md_lines.append(f"\n{sec['content']}\n")
+        if sec['equation']:
+            md_lines.append(f"**Key Formula:** `{sec['equation']}`\n")
+
+    md_lines.append("## 📌 Key Takeaways & Summary Checklist")
+    for t in key_takeaways:
+        md_lines.append(f"- {t}")
+
+    full_markdown_article = "\n".join(md_lines)
+
+    text_article = {
+        "title": article_title,
+        "summary": article_summary,
+        "full_markdown": full_markdown_article,
+        "sections": sections,
+        "equations": equations,
+        "key_takeaways": key_takeaways,
+        "wiki_extract": wiki_data.get("extract") if wiki_data else None,
+        "wiki_url": wiki_data.get("url") if wiki_data else None,
+    }
 
     # ── Build Response ──────────────────────────────────────
     response = {
@@ -166,10 +265,14 @@ async def full_pipeline(
         "scenes": scenes,
         "subtitle": subtitle_result,
         "quiz": quiz_data, # Added quiz data to response
+        "article": text_article,
+        "text_article": text_article,
         "knowledge_base": {
             "was_enriched": kb_result["was_enriched"],
             "source": kb_result["source"]
         },
+        "sources": kb_result.get("sources", []),
+        "wikipedia": wiki_data if wiki_data.get("was_found") else None,
         "models_used": {
             "filter": filter_result["model_used"],
             "summarizer": summary_result["model_used"],
@@ -180,21 +283,39 @@ async def full_pipeline(
     if video_result:
         response["video"] = video_result
 
-    logger.info(f"[{job_id}] ✅ Pipeline complete!")
+    logger.info(f"[{job_id}] ✅ Pipeline complete with video and text study guide!")
     return response
 
 
 @router.post("/text-only")
 async def generate_from_text(
-    text: str = Form(...),
-    target_language: str = Form("en"),
+    request: Request,
+    text: Optional[str] = Form(None),
+    target_language: Optional[str] = Form(None),
+    learning_mode: Optional[str] = Form(None),
 ):
     """
     Generate scenes from text input only (no video rendering).
     Faster — useful for previewing scenes before full generation.
     """
+    target_language = target_language or "en"
+    learning_mode = learning_mode or "beginner"
+
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            text = body.get("text", text)
+            target_language = body.get("target_language", target_language)
+            learning_mode = body.get("learning_mode", learning_mode)
+        except Exception:
+            pass
+
+    if not text or not text.strip():
+        raise HTTPException(400, "Please provide 'text'.")
+
     language_name = SUPPORTED_LANGUAGES.get(target_language, "English")
-    scenes = await generate_scenes(text, language_name)
+    scenes = await generate_scenes(text, language_name, learning_mode)
     scenes = await detect_scene_emotions(scenes)
 
     if target_language != "en":

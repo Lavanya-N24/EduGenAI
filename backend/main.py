@@ -2,38 +2,50 @@
 EduGenAI - FastAPI Main Application
 Entry point for the backend server.
 
-Run with: uvicorn main:app --reload --host 0.0.0.0 --port 8000
+Run with:
+    uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
+
 import logging
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from config import HOST, PORT, DEBUG, OUTPUT_DIR
+from config import HOST, PORT, DEBUG, OUTPUT_DIR, VIDEO_DIR
 from routes import generate, quiz, tutor, analytics, sharing
 from services.model_loader import load_all_models
 
+
 # ── Logging Setup ───────────────────────────────────────────
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s │ %(name)-20s │ %(levelname)-7s │ %(message)s",
     datefmt="%H:%M:%S",
 )
+
 logger = logging.getLogger("EduGenAI")
 
-# ── Lifespan (Startup/Shutdown) ─────────────────────────────
+
+# ── Lifespan ────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load ML models on startup
     logger.info("Loading trained ML models...")
+
     status = load_all_models()
+
     logger.info(f"Model load status: {status}")
+
     yield
-    # Cleanup on shutdown (if needed)
+
     logger.info("Shutting down EduGenAI...")
 
+
 # ── FastAPI App ─────────────────────────────────────────────
+
 app = FastAPI(
     title="EduGenAI API",
     lifespan=lifespan,
@@ -47,19 +59,52 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── CORS (allow Flutter app to connect) ─────────────────────
+
+# ── CORS ────────────────────────────────────────────────────
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to your domain
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
-# ── Serve generated files (video, audio, subtitles) ─────────
-app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+
+# ── Generated files ─────────────────────────────────────────
+#
+# /outputs/...  -> all normal generated output files
+# /videos/...   -> FINAL MP4 files created by services.video
+#
+# The important fix is /videos because video.py writes to VIDEO_DIR.
+
+OUTPUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+VIDEO_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+app.mount(
+    "/outputs",
+    StaticFiles(directory=str(OUTPUT_DIR)),
+    name="outputs",
+)
+
+app.mount(
+    "/videos",
+    StaticFiles(directory=str(VIDEO_DIR)),
+    name="videos",
+)
+
 
 # ── Register Routes ─────────────────────────────────────────
+
 app.include_router(generate.router)
 app.include_router(quiz.router)
 app.include_router(tutor.router)
@@ -68,6 +113,7 @@ app.include_router(sharing.router)
 
 
 # ── Root Endpoint ───────────────────────────────────────────
+
 @app.get("/")
 async def root():
     return {
@@ -75,6 +121,7 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",
+        "video_base_url": "/videos/",
         "endpoints": {
             "generate_video": "POST /api/generate/full-pipeline",
             "generate_scenes": "POST /api/generate/text-only",
@@ -90,10 +137,15 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "video_directory": str(VIDEO_DIR),
+        "video_directory_exists": VIDEO_DIR.exists(),
+    }
 
 
 # ── Run Server ──────────────────────────────────────────────
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -106,4 +158,3 @@ if __name__ == "__main__":
         port=PORT,
         reload=DEBUG,
     )
-

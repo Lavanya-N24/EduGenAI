@@ -121,11 +121,11 @@ async def record_quiz_result(
     # ── Identify Weak/Strong Areas ─────────────────────────
     user["weak_areas"] = [
         t for t, d in user["topics"].items()
-        if d["avg_score"] < 50 and d["attempts"] >= 2
+        if d["avg_score"] < 60 and d["attempts"] >= 1
     ]
     user["strong_areas"] = [
         t for t, d in user["topics"].items()
-        if d["avg_score"] >= 80 and d["attempts"] >= 2
+        if d["avg_score"] >= 70 and d["attempts"] >= 1
     ]
 
     _save_progress(data)
@@ -161,10 +161,6 @@ def _calculate_new_difficulty(topic_data: dict, current: str) -> str:
 
     avg = topic_data["avg_score"]
     attempts = topic_data["attempts"]
-
-    # Need at least 2 attempts before changing difficulty
-    if attempts < 2:
-        return current
 
     if avg >= 80 and current_idx < 2:
         return levels[current_idx + 1]  # Increase difficulty
@@ -206,14 +202,30 @@ async def get_user_analytics(user_id: str) -> dict:
     """
     data = _load_progress()
 
-    if user_id not in data["users"]:
-        return {
-            "user_id": user_id,
-            "has_data": False,
-            "message": "No learning history found. Take a quiz to get started!",
-        }
+    target_id = user_id
+    if target_id not in data["users"]:
+        # Fallback to default_user if available
+        if "default_user" in data["users"]:
+            target_id = "default_user"
+        elif data["users"]:
+            target_id = next(iter(data["users"]))
+        else:
+            return {
+                "user_id": user_id,
+                "has_data": False,
+                "overall_accuracy": 0,
+                "total_quizzes": 0,
+                "total_questions_answered": 0,
+                "current_difficulty": "medium",
+                "weak_areas": [],
+                "strong_areas": [],
+                "performance_trend": [],
+                "trend_direction": "neutral",
+                "topic_breakdown": {},
+                "recent_sessions": [],
+            }
 
-    user = data["users"][user_id]
+    user = data["users"][target_id]
 
     # Calculate overall accuracy
     overall_accuracy = (
@@ -223,9 +235,9 @@ async def get_user_analytics(user_id: str) -> dict:
     )
 
     # Performance trend (last 5 sessions)
-    recent_sessions = user["sessions"][-5:]
+    recent_sessions = user["sessions"][-10:]
     trend = [s["score"] for s in recent_sessions]
-    trend_direction = "improving" if len(trend) >= 2 and trend[-1] > trend[0] else "needs_attention"
+    trend_direction = "improving" if len(trend) >= 2 and trend[-1] >= trend[0] else "steady"
 
     # Topic breakdown
     topic_breakdown = {
@@ -238,15 +250,24 @@ async def get_user_analytics(user_id: str) -> dict:
         for topic, d in user["topics"].items()
     }
 
+    weak_areas = [
+        t for t, d in user["topics"].items()
+        if d["avg_score"] < 60 and d["attempts"] >= 1
+    ]
+    strong_areas = [
+        t for t, d in user["topics"].items()
+        if d["avg_score"] >= 70 and d["attempts"] >= 1
+    ]
+
     return {
         "user_id": user_id,
         "has_data": True,
         "overall_accuracy": round(overall_accuracy, 1),
         "total_quizzes": user["total_quizzes"],
         "total_questions_answered": user["total_questions"],
-        "current_difficulty": user["current_difficulty"],
-        "weak_areas": user["weak_areas"],
-        "strong_areas": user["strong_areas"],
+        "current_difficulty": user.get("current_difficulty", "medium"),
+        "weak_areas": weak_areas,
+        "strong_areas": strong_areas,
         "performance_trend": trend,
         "trend_direction": trend_direction,
         "topic_breakdown": topic_breakdown,

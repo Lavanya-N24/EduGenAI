@@ -6,12 +6,44 @@ import asyncio
 import logging
 import uuid
 import os
+import subprocess
 from pathlib import Path
 from gtts import gTTS
 
 from config import AUDIO_DIR
 
 logger = logging.getLogger(__name__)
+
+# Approximate words-per-minute for each language with gTTS
+# Indic / RTL scripts are spoken more slowly than English
+_LANG_WPM = {
+    "en": 150, "fr": 140, "de": 130, "es": 145, "pt": 145,
+    "ru": 120, "ko": 110, "ja": 110, "zh-cn": 100,
+    "ar": 110, "fa": 110,
+    "hi": 100, "mr": 95, "sa": 90,
+    "ta": 95,  "te": 95, "kn": 95, "ml": 95,
+    "bn": 100, "gu": 100, "ur": 100,
+}
+
+
+def _get_mp3_duration(path: str) -> float:
+    """Use ffprobe to get the exact duration of an MP3 file (seconds)."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return float(result.stdout.strip())
+    except Exception as e:
+        logger.debug("ffprobe duration failed: %s", e)
+        return 0.0
 
 # Basic supported languages for gTTS mapped from our config
 GTTS_LANG_MAP = {
@@ -71,17 +103,20 @@ async def generate_speech(
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _run_gtts)
 
-        # Get audio duration estimate (rough: ~150 words per minute)
+        # Get audio duration — prefer exact ffprobe measurement over word-count estimate
         word_count = len(text.split())
-        estimated_duration = (word_count / 150) * 60  # seconds
-        
-        # If librosa is installed, try to get exact duration
-        try:
-            import librosa
-            y, sr = librosa.load(str(output_path), sr=None)
-            estimated_duration = librosa.get_duration(y=y, sr=sr)
-        except Exception as e:
-            logger.warning(f"Could not calculate exact duration with librosa, using estimate: {e}")
+        wpm = _LANG_WPM.get(language, _LANG_WPM.get(gtts_lang, 120))
+        estimated_duration = max(5.0, (word_count / wpm) * 60)  # seconds
+
+        # Use ffprobe for the exact actual MP3 duration
+        exact_dur = _get_mp3_duration(str(output_path))
+        if exact_dur and exact_dur > 0.5:
+            estimated_duration = exact_dur
+            logger.info(f"Audio duration (ffprobe): {exact_dur:.1f}s")
+        else:
+            # Ensure minimum per-scene duration of 8 seconds
+            estimated_duration = max(8.0, estimated_duration)
+            logger.info(f"Audio duration (estimated): {estimated_duration:.1f}s for {word_count} words @{wpm}wpm")
 
         logger.info(
             f"TTS generated: {output_filename} | Language: {gtts_lang} | Words: {word_count}"

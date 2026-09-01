@@ -87,39 +87,31 @@ async def _duckduckgo_search(query: str) -> str | None:
 
 async def enrich_with_knowledge_base(text: str, max_trigger_length: int = 400) -> dict:
     """
-    Checks if the input text is short (a topic or keyword). If so, searches
-    Wikipedia (and DuckDuckGo as secondary source) to retrieve rich educational
-    context before sending it to the ML filter model and video pipeline.
-
-    Args:
-        text: The raw input text.
-        max_trigger_length: Only texts shorter than this will trigger a search.
-
-    Returns:
-        dict with enriched_text, was_enriched, and source.
+    Searches Wikipedia using Wikimedia REST APIs to retrieve rich educational
+    context before sending it to the ML filter model, summarizer, and video pipeline.
     """
     clean_text = text.strip()
 
     if len(clean_text) > max_trigger_length:
         logger.info(f"Text is {len(clean_text)} chars (over {max_trigger_length}). Skipping Knowledge Base.")
-        return {"enriched_text": text, "was_enriched": False, "source": None}
+        return {"enriched_text": text, "was_enriched": False, "source": None, "sources": []}
 
     logger.info(f"Text is short ({len(clean_text)} chars). Searching Knowledge Base for: '{clean_text}'")
 
-    # 1. Primary Source: Wikipedia
+    # 1. Primary Source: Wikipedia REST API
     try:
-        title = await _wiki_search(clean_text)
-        if title:
-            logger.info(f"Found Wikipedia article: {title}")
-            wiki_summary = await _wiki_extract(title, sentences=15)
-            if wiki_summary:
-                enriched_text = f"Topic: {clean_text}\n\nFactual Context from Wikipedia:\n{wiki_summary}"
-                logger.info(f"Knowledge Base enrichment successful via Wikipedia ({len(wiki_summary)} chars).")
-                return {
-                    "enriched_text": enriched_text,
-                    "was_enriched": True,
-                    "source": f"Wikipedia: {title}",
-                }
+        from services.wikipedia import research_topic
+        wiki_res = await research_topic(clean_text)
+        if wiki_res.get("was_found") and wiki_res.get("extract"):
+            enriched_text = f"Topic: {clean_text}\n\nFactual Context from Wikipedia ({wiki_res['title']}):\n{wiki_res['extract']}"
+            logger.info(f"Knowledge Base enrichment successful via Wikipedia: {wiki_res['title']}")
+            return {
+                "enriched_text": enriched_text,
+                "was_enriched": True,
+                "source": f"Wikipedia: {wiki_res['title']}",
+                "sources": wiki_res.get("sources", []),
+                "wikipedia_data": wiki_res,
+            }
     except Exception as e:
         logger.error(f"Wikipedia enrichment failed: {e}")
 
@@ -133,9 +125,11 @@ async def enrich_with_knowledge_base(text: str, max_trigger_length: int = 400) -
                 "enriched_text": enriched_text,
                 "was_enriched": True,
                 "source": "DuckDuckGo Knowledge Base",
+                "sources": [{"title": "DuckDuckGo Knowledge Base", "url": f"https://duckduckgo.com/?q={clean_text}"}],
+                "wikipedia_data": None,
             }
     except Exception as e:
         logger.error(f"Secondary knowledge source failed: {e}")
 
-    return {"enriched_text": text, "was_enriched": False, "source": None}
+    return {"enriched_text": text, "was_enriched": False, "source": None, "sources": [], "wikipedia_data": None}
 

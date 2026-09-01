@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "177339568494",
+    "project_id": "edugenai-11196",
+    "storage_bucket": "edugenai-11196.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:177339568494:android:83e003310222231b9cf17f",
+        "android_client_info": {
+          "package_name": "com.example.edugenai"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "177339568494-raifc6tuvri1o3alu4bm3gj8hfss4uh6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDKBEdxIOI7-S0_X84Wl01hyTYCZnjvoWY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "177339568494-raifc6tuvri1o3alu4bm3gj8hfss4uh6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

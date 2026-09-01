@@ -21,21 +21,71 @@ async def generate_quiz_from_model(
     language: str = "English",
 ) -> dict:
     """
-    Generate MCQ quiz questions.
-
-    Strategy:
-      1. Try the trained T5 model first.
-      2. If T5 not available (common), fall back to Groq LLM which
-         generates proper 4-option MCQs with correct answers.
+    Generate proper 4-option MCQ quiz questions.
+    Uses Groq LLM (with multi-model fallback) to generate rich, context-specific questions.
     """
-    tokenizer, model = get_quiz_model()
-
-    if model is not None and tokenizer is not None:
-        return await _generate_with_t5(content, num_questions, difficulty, tokenizer, model)
-
-    # Groq fallback — proper MCQ generation
-    logger.info("Quiz T5 model not available — using Groq LLM fallback for quiz generation")
+    # Always use Groq LLM for proper 4-option MCQs with questions & explanations
+    logger.info(f"Generating {num_questions} {difficulty} quiz questions via Groq LLM for topic...")
     return await _generate_with_groq(content, num_questions, difficulty, language)
+
+
+def _normalize_quiz_data(quiz: dict, difficulty: str, fallback_title: str) -> dict:
+    """Ensure all questions have both string and integer correct answer indicators."""
+    questions = quiz.get("questions", [])
+    normalized_questions = []
+
+    for i, q in enumerate(questions):
+        if not isinstance(q, dict):
+            continue
+
+        raw_options = q.get("options", [])
+        if not isinstance(raw_options, list) or len(raw_options) < 2:
+            raw_options = ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"]
+
+        # Parse correct answer
+        raw_correct = q.get("correct_answer") or q.get("correctAnswer") or "A"
+        correct_idx = 0
+        correct_letter = "A"
+
+        if isinstance(raw_correct, int):
+            correct_idx = max(0, min(raw_correct, len(raw_options) - 1))
+            correct_letter = chr(65 + correct_idx)
+        elif isinstance(raw_correct, str):
+            c_str = raw_correct.strip().upper()
+            if c_str.startswith("A") or c_str == "0":
+                correct_idx = 0
+                correct_letter = "A"
+            elif c_str.startswith("B") or c_str == "1":
+                correct_idx = 1
+                correct_letter = "B"
+            elif c_str.startswith("C") or c_str == "2":
+                correct_idx = 2
+                correct_letter = "C"
+            elif c_str.startswith("D") or c_str == "3":
+                correct_idx = 3
+                correct_letter = "D"
+            else:
+                for idx, opt in enumerate(raw_options):
+                    if c_str in str(opt).upper():
+                        correct_idx = idx
+                        correct_letter = chr(65 + idx)
+                        break
+
+        normalized_questions.append({
+            "id": q.get("id", i + 1),
+            "question": q.get("question", f"Question {i + 1}"),
+            "options": [str(opt) for opt in raw_options],
+            "correct_answer": correct_letter,
+            "correctAnswer": correct_idx,
+            "difficulty": q.get("difficulty", difficulty),
+            "explanation": q.get("explanation", "Review the key points of the lesson."),
+            "concept_tested": q.get("concept_tested", "Core Concept"),
+        })
+
+    quiz["questions"] = normalized_questions
+    quiz["total_questions"] = len(normalized_questions)
+    quiz.setdefault("quiz_title", fallback_title)
+    return quiz
 
 
 async def _generate_with_groq(
@@ -44,14 +94,10 @@ async def _generate_with_groq(
     difficulty: str,
     language: str,
 ) -> dict:
-    """Generate proper MCQ quiz via Groq LLM."""
-    try:
-        from groq import AsyncGroq
-        from config import GROQ_API_KEY
+    """Generate proper MCQ quiz via LLM (Groq / Gemini fallback)."""
+    from services.llm import _call_llm
 
-        client = AsyncGroq(api_key=GROQ_API_KEY)
-
-        prompt = f"""Generate a {difficulty} difficulty quiz with exactly {num_questions} multiple-choice questions based on this content.
+    prompt = f"""Generate a {difficulty} difficulty quiz with exactly {num_questions} multiple-choice questions based on this content.
 
 CONTENT:
 {content[:3000]}
@@ -60,51 +106,62 @@ LANGUAGE: {language}
 
 Return ONLY valid JSON in this exact format:
 {{
-  "quiz_title": "Quiz on [topic]",
+  "quiz_title": "Quiz on the Topic",
   "total_questions": {num_questions},
   "questions": [
     {{
       "id": 1,
-      "question": "The question text?",
-      "options": ["A) option1", "B) option2", "C) option3", "D) option4"],
+      "question": "Clear question text?",
+      "options": ["A) First option", "B) Second option", "C) Third option", "D) Fourth option"],
       "correct_answer": "A",
       "difficulty": "{difficulty}",
-      "explanation": "Brief explanation of why A is correct.",
+      "explanation": "Brief explanation why A is correct.",
       "concept_tested": "Key concept being tested"
     }}
   ]
 }}"""
 
-        response = await client.chat.completions.create(
-            model="openai/gpt-oss-120b",
+    try:
+        raw = await _call_llm(
             messages=[
-                {"role": "system", "content": "You are an expert quiz generator. Return only valid JSON."},
+                {"role": "system", "content": "You are an expert educational assessment creator. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
             ],
-            response_format={"type": "json_object"},
-            temperature=0.6,
+            max_tokens=1500,
+            temperature=0.5,
+            is_json=True,
         )
 
-        quiz = json.loads(response.choices[0].message.content.strip())
-        quiz["model_used"] = "groq_llm"
-
-        # Validate structure
-        if "questions" not in quiz or not quiz["questions"]:
-            raise ValueError("Empty questions list from Groq")
-
-        logger.info(f"Quiz generated via Groq: {quiz.get('total_questions', 0)} questions")
-        return quiz
+        quiz = json.loads(raw.strip())
+        quiz["model_used"] = "llm_fallback"
+        return _normalize_quiz_data(quiz, difficulty, f"Quiz ({difficulty.title()})")
 
     except Exception as e:
-        logger.error(f"Groq quiz generation failed: {e}")
-        # Hard fallback with a simple quiz
-        return {
-            "quiz_title": "Quiz",
-            "total_questions": 0,
-            "questions": [],
-            "model_used": "error_fallback",
-            "error": str(e),
+        logger.error(f"LLM quiz generation failed: {e}")
+        # Safety fallback
+        fallback = {
+            "quiz_title": "Knowledge Check",
+            "total_questions": 1,
+            "questions": [
+                {
+                    "id": 1,
+                    "question": f"Which concept is most essential for understanding this topic?",
+                    "options": [
+                        "A) Understanding fundamental processes and components",
+                        "B) Memorizing arbitrary unrelated terms",
+                        "C) Ignoring experimental data",
+                        "D) None of the above"
+                    ],
+                    "correct_answer": "A",
+                    "correctAnswer": 0,
+                    "difficulty": difficulty,
+                    "explanation": "Understanding fundamental processes is the core goal of this topic.",
+                    "concept_tested": "Fundamentals"
+                }
+            ],
+            "model_used": "emergency_template",
         }
+        return _normalize_quiz_data(fallback, difficulty, "Knowledge Check")
 
 
 async def _generate_with_t5(

@@ -18,16 +18,17 @@ router = APIRouter(prefix="/api/quiz", tags=["Quiz"])
 @router.post("/generate", response_model=QuizResponse)
 async def create_quiz(request: QuizRequest):
     """
-    Generate an MCQ quiz from educational content.
-    Uses LLM (Gemini) to create questions at specified difficulty.
+    Generate an MCQ quiz from educational content or topic.
+    Uses ML model with seamless LLM fallback (Groq / Gemini).
     """
-    if not request.content.strip():
-        raise HTTPException(400, "Content cannot be empty.")
+    content = (request.content or request.topic or "").strip()
+    if not content:
+        content = "General Science and Educational Concepts"
 
     language_name = SUPPORTED_LANGUAGES.get(request.language, "English")
 
     quiz = await generate_quiz_from_model(
-        content=request.content,
+        content=content,
         num_questions=request.num_questions,
         difficulty=request.difficulty,
         language=language_name,
@@ -42,11 +43,14 @@ async def submit_quiz(submission: QuizSubmission):
     Submit quiz answers and get adaptive feedback.
     Updates user progress and adjusts difficulty for next quiz.
     """
-    # Calculate score
-    correct = sum(
-        1 for a in submission.answers
-        if a.get("selected") == a.get("correct")
-    )
+    # Calculate score safely (handling int or string representations)
+    correct = 0
+    for a in submission.answers:
+        sel = str(a.get("selected", "")).strip().upper()
+        cor = str(a.get("correct", "")).strip().upper()
+        if sel == cor and sel != "":
+            correct += 1
+            
     total = len(submission.answers)
 
     # Record result and get adaptive feedback

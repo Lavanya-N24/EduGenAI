@@ -39,10 +39,12 @@ async def chat_with_tutor(request: TutorRequest):
         for msg in request.chat_history
     ]
 
+    effective_context = request.context or request.topic or "General Educational Topic"
+
     # Get tutor response
     response = await tutor_chat(
         message=request.message,
-        context=request.context,
+        context=effective_context,
         chat_history=history,
         difficulty=difficulty,
         weak_areas=weak_areas,

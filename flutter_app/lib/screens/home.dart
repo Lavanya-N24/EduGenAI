@@ -1,470 +1,1107 @@
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import '../main.dart' show AppColors;
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  final _textCtrl = TextEditingController();
-  String _lang = 'en';
-  String _mode = 'beginner';
-  Uint8List? _fileBytes;
-  String? _fileName;
-  bool _loading = false;
-  String _status = '';
+class _HomeScreenState extends State<HomeScreen> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final TextEditingController _promptController = TextEditingController();
 
-  late AnimationController _bgCtrl;
-  late AnimationController _pulseCtrl;
-  Animation<double>? _bgAnim;
-  Animation<double>? _pulseAnim;
+  String? _attachedFileName;
+  Uint8List? _attachedFileBytes;
+  
+  // ── Learning Level State (Basic, Beginner, Advanced) ──
+  String _selectedLevelKey = 'beginner';
+  String _selectedLevelLabel = 'Beginner';
 
-  static const _userId = 'default_user';
+  final List<Map<String, String>> _levels = [
+    {
+      'key': 'basic',
+      'label': 'Basic',
+      'icon': '🌱',
+      'desc': 'Simple summaries & fundamental concepts'
+    },
+    {
+      'key': 'beginner',
+      'label': 'Beginner',
+      'icon': '📘',
+      'desc': 'Balanced explanations with clear examples'
+    },
+    {
+      'key': 'advanced',
+      'label': 'Advanced',
+      'icon': '🔥',
+      'desc': 'In-depth technical breakdown & detailed theory'
+    },
+  ];
 
-  final _langs = const {
-    'en':'🇬🇧 English','hi':'🇮🇳 Hindi','ta':'🇮🇳 Tamil','te':'🇮🇳 Telugu',
-    'ml':'🇮🇳 Malayalam','kn':'🇮🇳 Kannada','bn':'🇮🇳 Bengali','mr':'🇮🇳 Marathi',
-    'fr':'🇫🇷 French','es':'🇪🇸 Spanish','de':'🇩🇪 German','ja':'🇯🇵 Japanese',
-    'zh-cn':'🇨🇳 Chinese','ar':'🇸🇦 Arabic','ko':'🇰🇷 Korean','ru':'🇷🇺 Russian',
-  };
+  String _targetLanguage = 'en';
+  String _targetLanguageLabel = '🌐 English';
+  bool _isListening = false;
+
+  // ── 15-language list ──────────────────────────────────────────────────────
+  final List<Map<String, String>> _languages = [
+    // Indian Languages
+    {'code': 'kn', 'label': 'Kannada', 'native': 'ಕನ್ನಡ', 'flag': '🇮🇳'},
+    {'code': 'hi', 'label': 'Hindi',   'native': 'हिन्दी',  'flag': '🇮🇳'},
+    {'code': 'te', 'label': 'Telugu',  'native': 'తెలుగు',  'flag': '🇮🇳'},
+    {'code': 'ta', 'label': 'Tamil',   'native': 'தமிழ்',   'flag': '🇮🇳'},
+    {'code': 'ml', 'label': 'Malayalam','native': 'മലയാളം', 'flag': '🇮🇳'},
+    {'code': 'bn', 'label': 'Bengali', 'native': 'বাংলা',   'flag': '🇮🇳'},
+    {'code': 'gu', 'label': 'Gujarati','native': 'ગુજરાતી', 'flag': '🇮🇳'},
+    {'code': 'mr', 'label': 'Marathi', 'native': 'मराठी',   'flag': '🇮🇳'},
+    {'code': 'ur', 'label': 'Urdu',    'native': 'اردو',    'flag': '🇵🇰'},
+    // Global Languages
+    {'code': 'en', 'label': 'English',  'native': 'English',   'flag': '🌐'},
+    {'code': 'ja', 'label': 'Japanese', 'native': '日本語',      'flag': '🇯🇵'},
+    {'code': 'ar', 'label': 'Arabic',   'native': 'العربية',    'flag': '🇸🇦'},
+    {'code': 'es', 'label': 'Spanish',  'native': 'Español',    'flag': '🇪🇸'},
+    {'code': 'fr', 'label': 'French',   'native': 'Français',   'flag': '🇫🇷'},
+    {'code': 'de', 'label': 'German',   'native': 'Deutsch',    'flag': '🇩🇪'},
+  ];
 
   @override
-  void initState() {
-    super.initState();
-    _bgCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4))..repeat(reverse: true);
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
-    _bgAnim = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(parent: _bgCtrl, curve: Curves.easeInOut));
-    _pulseAnim = Tween<double>(begin: 1.0, end: 1.04).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+  void dispose() {
+    _promptController.dispose();
+    super.dispose();
   }
-
-  @override
-  void dispose() { _textCtrl.dispose(); _bgCtrl.dispose(); _pulseCtrl.dispose(); super.dispose(); }
 
   Future<void> _pickFile() async {
-    final r = await FilePicker.platform.pickFiles(
-      type: FileType.custom, withData: true,
-      allowedExtensions: ['pdf','txt','png','jpg','jpeg','docx','pptx']);
-    if (r?.files.single.bytes != null) {
-      setState(() { _fileBytes = r!.files.single.bytes; _fileName = r.files.single.name; });
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'docx', 'pptx', 'txt', 'png', 'jpg', 'jpeg'],
+      withData: true,
+    );
+    if (result != null && result.files.isNotEmpty) {
+      setState(() {
+        _attachedFileName = result.files.single.name;
+        _attachedFileBytes = result.files.single.bytes;
+      });
     }
   }
 
-  Future<void> _generate() async {
-    final hasText = _textCtrl.text.trim().isNotEmpty;
-    if (!hasText && _fileBytes == null) { _snack('Enter text or upload a file'); return; }
-    setState(() { _loading = true; _status = '🧠 AI is crafting your video...'; });
-    try {
-      final result = await ApiService.generateFullPipeline(
-        text: hasText ? _textCtrl.text.trim() : null,
-        fileBytes: _fileBytes, fileName: _fileName,
-        targetLanguage: _lang, generateVideo: true,
-        learningMode: _mode, userId: _userId,
+  // ── Level Selection Bottom Sheet ──
+  void _showLevelPicker(bool isDark) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final sheetBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+        final textColor = isDark ? Colors.white : AppColors.ink;
+
+        return Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          decoration: BoxDecoration(
+            color: sheetBg,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark ? Colors.white12 : AppColors.border,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(
+                  'Select Learning Level',
+                  style: TextStyle(
+                    fontFamily: 'Georgia',
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              ..._levels.map((lvl) {
+                final isSelected = _selectedLevelKey == lvl['key'];
+                return Container(
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? (isDark ? const Color(0xFF2C2C2C) : const Color(0xFFF3EFE6))
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: ListTile(
+                    dense: true,
+                    leading: Text(lvl['icon']!, style: const TextStyle(fontSize: 22)),
+                    title: Text(
+                      lvl['label']!,
+                      style: TextStyle(
+                        fontFamily: 'Roboto',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: textColor,
+                      ),
+                    ),
+                    subtitle: Text(
+                      lvl['desc']!,
+                      style: TextStyle(
+                        fontFamily: 'Roboto',
+                        fontSize: 12,
+                        color: isDark ? Colors.white60 : AppColors.inkSoft,
+                      ),
+                    ),
+                    trailing: isSelected
+                        ? const Icon(Icons.check_circle_rounded, color: Color(0xFFD97706))
+                        : null,
+                    onTap: () {
+                      setState(() {
+                        _selectedLevelKey = lvl['key']!;
+                        _selectedLevelLabel = lvl['label']!;
+                      });
+                      Navigator.pop(context);
+                    },
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Language Selection Bottom Sheet ──
+  void _showLanguagePicker(bool isDark) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final sheetBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+        final textColor = isDark ? Colors.white : AppColors.ink;
+
+        return Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          decoration: BoxDecoration(
+            color: sheetBg,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark ? Colors.white12 : AppColors.border,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(
+                  'Select Output Language',
+                  style: TextStyle(
+                    fontFamily: 'Georgia',
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  'Video narration, subtitles and TTS will be in the selected language.',
+                  style: TextStyle(
+                    fontFamily: 'Roboto',
+                    fontSize: 12,
+                    color: isDark ? Colors.white54 : AppColors.inkSoft,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _languages.length,
+                  itemBuilder: (_, i) {
+                    final lang = _languages[i];
+                    final isSelected = _targetLanguage == lang['code'];
+                    // Section divider between Indian and Global
+                    final showDivider = i == 9;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (showDivider) ...[
+                          const SizedBox(height: 4),
+                          Divider(color: isDark ? Colors.white12 : AppColors.border, height: 1),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 10, 8, 2),
+                            child: Text(
+                              'Global Languages',
+                              style: TextStyle(
+                                fontFamily: 'Roboto',
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? Colors.white38 : AppColors.inkSoft,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                        ] else if (i == 0)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                            child: Text(
+                              'Indian Languages',
+                              style: TextStyle(
+                                fontFamily: 'Roboto',
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? Colors.white38 : AppColors.inkSoft,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                        Container(
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? (isDark
+                                    ? const Color(0xFF2C2C2C)
+                                    : const Color(0xFFF3EFE6))
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: ListTile(
+                            dense: true,
+                            leading: Text(
+                              lang['flag']!,
+                              style: const TextStyle(fontSize: 22),
+                            ),
+                            title: Text(
+                              lang['label']!,
+                              style: TextStyle(
+                                fontFamily: 'Roboto',
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                                color: textColor,
+                              ),
+                            ),
+                            subtitle: Text(
+                              lang['native']!,
+                              style: TextStyle(
+                                fontFamily: 'Roboto',
+                                fontSize: 12,
+                                color: isDark ? Colors.white54 : AppColors.inkSoft,
+                              ),
+                            ),
+                            trailing: isSelected
+                                ? const Icon(
+                                    Icons.check_circle_rounded,
+                                    color: Color(0xFFD97706),
+                                  )
+                                : null,
+                            onTap: () {
+                              setState(() {
+                                _targetLanguage = lang['code']!;
+                                _targetLanguageLabel =
+                                    '${lang["flag"]!} ${lang["label"]!}';
+                              });
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _sendPrompt() async {
+    final text = _promptController.text.trim();
+    if (text.isEmpty && _attachedFileBytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a topic or upload a file first'),
+          backgroundColor: Colors.orangeAccent,
+        ),
       );
-      if (mounted) Navigator.pushNamed(context, '/result', arguments: result);
+      return;
+    }
+
+    // Loading Dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Center(
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 32),
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF222222) : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: isDark ? Colors.white12 : AppColors.border,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: CircularProgressIndicator(
+                    color: Color(0xFFD97706),
+                    strokeWidth: 3,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Generating $_selectedLevelLabel Video...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Georgia',
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : AppColors.ink,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Synthesizing script, generating scenes, and rendering audio.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Roboto',
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFFA0A6C0) : AppColors.inkSoft,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    try {
+      final response = await ApiService.generateFullPipeline(
+        text: text.isNotEmpty ? text : null,
+        fileBytes: _attachedFileBytes,
+        fileName: _attachedFileName,
+        targetLanguage: _targetLanguage,
+        learningMode: _selectedLevelKey, // Selected Level passed here
+      );
+
+      if (mounted) Navigator.of(context).pop();
+
+      // Save to history
+      final lessonTitle = response['title'] ?? response['topic'] ?? (text.isNotEmpty ? text : 'Lesson');
+      await AuthService.instance.saveHistoryItem(
+        title: lessonTitle,
+        mode: _selectedLevelKey,
+        generationData: response,
+      );
+
+      if (mounted) {
+        Navigator.pushNamed(context, '/result', arguments: response);
+      }
     } catch (e) {
-      if (mounted) _snack('Error: $e');
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) Navigator.of(context).pop();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Generation error: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
     }
   }
 
-  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(m), backgroundColor: Colors.redAccent,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))));
+  // ── Gemini-style Attachment Modal Sheet ──
+  void _showAttachmentSheet(bool isDark) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        final sheetBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+        final pillBg = isDark ? const Color(0xFF2C2C2C) : const Color(0xFFF3EFE6);
+        final textColor = isDark ? Colors.white : AppColors.ink;
+        final subTextColor = isDark ? Colors.white60 : AppColors.inkSoft;
+
+        return Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          decoration: BoxDecoration(
+            color: sheetBg,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: isDark ? Colors.white12 : AppColors.border,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _buildTopPill(
+                      icon: Icons.attach_file_rounded,
+                      label: 'Files',
+                      pillBg: pillBg,
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _pickFile();
+                      },
+                    ),
+                    const SizedBox(width: 14),
+                    _buildTopPill(
+                      icon: Icons.face_rounded,
+                      label: 'Avatar',
+                      pillBg: pillBg,
+                      textColor: textColor,
+                      onTap: () => Navigator.pop(context),
+                    ),
+                    const SizedBox(width: 14),
+                    _buildTopPill(
+                      icon: Icons.add_to_drive_rounded,
+                      label: 'Drive',
+                      pillBg: pillBg,
+                      textColor: textColor,
+                      onTap: () => Navigator.pop(context),
+                    ),
+                    const SizedBox(width: 14),
+                    _buildTopPill(
+                      icon: Icons.photo_library_outlined,
+                      label: 'Photos',
+                      pillBg: pillBg,
+                      textColor: textColor,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _pickFile();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              Divider(color: isDark ? Colors.white12 : AppColors.border, height: 1),
+              const SizedBox(height: 10),
+              _buildFeatureTile(
+                icon: Icons.image_outlined,
+                title: 'Images',
+                subtitle: 'Upload diagrams, schematics, and notes',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickFile();
+                },
+              ),
+              _buildFeatureTile(
+                icon: Icons.movie_creation_outlined,
+                title: 'Videos',
+                subtitle: 'Convert topic into animated video lesson',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => Navigator.pop(context),
+              ),
+              _buildFeatureTile(
+                icon: Icons.music_note_outlined,
+                title: 'Audio',
+                subtitle: 'Generate podcasts and audio tracks',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTopPill({
+    required IconData icon,
+    required String label,
+    required Color pillBg,
+    required Color textColor,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(color: pillBg, shape: BoxShape.circle),
+            child: Icon(icon, color: textColor, size: 24),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'Roboto',
+              color: textColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeatureTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color textColor,
+    required Color subTextColor,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFD97706).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: const Color(0xFFD97706), size: 22),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          color: textColor,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(fontFamily: 'Roboto', fontSize: 12, color: subTextColor),
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF161616) : const Color(0xFFFAF9F5);
+    final cardColor = isDark ? const Color(0xFF222222) : Colors.white;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF06080F),
-      body: Stack(children: [
-        _buildAnimatedBg(),
-        SafeArea(child: SingleChildScrollView(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _buildHeroBanner(),
-            _buildNavRow(),
+      key: _scaffoldKey,
+      backgroundColor: bgColor,
+      drawer: _buildSketchDrawer(isDark),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Top Bar
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const SizedBox(height: 28),
-                _buildModeSelector(),
-                const SizedBox(height: 28),
-                _buildNeonDivider('📝  Your Content'),
-                const SizedBox(height: 14),
-                _buildTextInput(),
-                const SizedBox(height: 14),
-                _buildUploadTile(),
-                const SizedBox(height: 28),
-                _buildNeonDivider('🌐  Output Language'),
-                const SizedBox(height: 14),
-                _buildLanguagePicker(),
-                const SizedBox(height: 36),
-                _buildGenerateCTA(),
-                const SizedBox(height: 40),
-              ]),
-            ),
-          ]),
-        )),
-      ]),
-    );
-  }
-
-  // ── Animated mesh background ──────────────────────────────
-  Widget _buildAnimatedBg() {
-    if (_bgAnim == null) return const SizedBox.shrink();
-    return AnimatedBuilder(animation: _bgAnim!, builder: (_, __) {
-      return CustomPaint(painter: _BgPainter(_bgAnim!.value), child: const SizedBox.expand());
-    });
-  }
-
-  // ── Hero banner ───────────────────────────────────────────
-  Widget _buildHeroBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [const Color(0xFF1A1040), const Color(0xFF0D1B2A), const Color(0xFF06080F)],
-        ),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Logo pill
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [Color(0xFF6C63FF), Color(0xFF4ECDC4)]),
-            borderRadius: BorderRadius.circular(30),
-            boxShadow: [BoxShadow(color: const Color(0xFF6C63FF).withAlpha(120), blurRadius: 18, spreadRadius: 1)],
-          ),
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.auto_awesome, color: Colors.white, size: 16),
-            SizedBox(width: 7),
-            Text('EduGenAI', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 1)),
-          ]),
-        ),
-        const SizedBox(height: 20),
-        // Big headline
-        ShaderMask(
-          shaderCallback: (b) => const LinearGradient(
-            colors: [Colors.white, Color(0xFFB8B5FF)],
-            begin: Alignment.topLeft, end: Alignment.bottomRight,
-          ).createShader(b),
-          child: const Text('Turn Any Content\nInto a Video Lesson',
-            style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900, height: 1.2, letterSpacing: -0.5)),
-        ),
-        const SizedBox(height: 12),
-        Text('AI-powered • Multi-language • Under 10 seconds',
-          style: TextStyle(color: Colors.white.withAlpha(130), fontSize: 13, letterSpacing: 0.2)),
-        const SizedBox(height: 20),
-        // Stats row
-        Row(children: [
-          _heroBadge('⚡', '< 10s', 'Generation'),
-          const SizedBox(width: 10),
-          _heroBadge('🌐', '16+', 'Languages'),
-          const SizedBox(width: 10),
-          _heroBadge('🎯', '3', 'Levels'),
-        ]),
-      ]),
-    );
-  }
-
-  Widget _heroBadge(String emoji, String val, String label) {
-    return Expanded(child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(8),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withAlpha(20)),
-      ),
-      child: Column(children: [
-        Text(emoji, style: const TextStyle(fontSize: 18)),
-        const SizedBox(height: 4),
-        Text(val, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
-        Text(label, style: TextStyle(color: Colors.white.withAlpha(100), fontSize: 10)),
-      ]),
-    ));
-  }
-
-  // ── Nav row ───────────────────────────────────────────────
-  Widget _buildNavRow() {
-    final items = [
-      ('Analytics', Icons.analytics_rounded, const Color(0xFF4ECDC4), '/analytics'),
-      ('AI Tutor', Icons.school_rounded, const Color(0xFFFF6B6B), '/tutor'),
-      ('Quiz', Icons.quiz_rounded, const Color(0xFFFFE66D), '/quiz'),
-      ('History', Icons.video_library_rounded, const Color(0xFF6C63FF), '/history'),
-    ];
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(6),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withAlpha(12)),
-      ),
-      child: Row(children: items.map((item) {
-        final (label, icon, color, route) = item;
-        return Expanded(child: GestureDetector(
-          onTap: () => Navigator.pushNamed(context, route),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(13)),
-            child: Column(children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(height: 4),
-              Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700)),
-            ]),
-          ),
-        ));
-      }).toList()),
-    );
-  }
-
-  // ── Mode selector ─────────────────────────────────────────
-  Widget _buildModeSelector() {
-    final modes = [
-      ('basic', '🌱', 'Basic', const Color(0xFF4CAF50)),
-      ('beginner', '📘', 'Beginner', const Color(0xFF6C63FF)),
-      ('advanced', '🔥', 'Advanced', const Color(0xFFFF5722)),
-    ];
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _label('🎯  Learning Mode'),
-      const SizedBox(height: 12),
-      Container(
-        padding: const EdgeInsets.all(5),
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(6),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.white.withAlpha(12)),
-        ),
-        child: Row(children: modes.map((m) {
-          final (id, emoji, name, color) = m;
-          final sel = _mode == id;
-          return Expanded(child: GestureDetector(
-            onTap: () => setState(() => _mode = id),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOut,
-              margin: const EdgeInsets.all(2),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                gradient: sel ? LinearGradient(colors: [color.withAlpha(60), color.withAlpha(30)]) : null,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: sel ? color : Colors.transparent, width: 1.5),
-                boxShadow: sel ? [BoxShadow(color: color.withAlpha(100), blurRadius: 14, spreadRadius: 0)] : [],
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      Icons.menu_rounded,
+                      size: 26,
+                      color: isDark ? Colors.white70 : const Color(0xFF333333),
+                    ),
+                    onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                  ),
+                  Text(
+                    'EduGenAI',
+                    style: TextStyle(
+                      fontFamily: 'Georgia',
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : AppColors.ink,
+                    ),
+                  ),
+                  const SizedBox(width: 48),
+                ],
               ),
-              child: Column(children: [
-                AnimatedScale(scale: sel ? 1.15 : 1.0, duration: const Duration(milliseconds: 220),
-                  child: Text(emoji, style: const TextStyle(fontSize: 22))),
-                const SizedBox(height: 5),
-                Text(name, style: TextStyle(
-                  color: sel ? color : Colors.white54,
-                  fontWeight: FontWeight.w800, fontSize: 12)),
-              ]),
             ),
-          ));
-        }).toList()),
-      ),
-    ]);
-  }
 
-  // ── Neon divider ──────────────────────────────────────────
-  Widget _buildNeonDivider(String title) {
-    return Row(children: [
-      Container(width: 3, height: 18, decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFF6C63FF), Color(0xFF4ECDC4)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
-        borderRadius: BorderRadius.circular(3),
-        boxShadow: [BoxShadow(color: const Color(0xFF6C63FF).withAlpha(120), blurRadius: 8)],
-      )),
-      const SizedBox(width: 10),
-      Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15, letterSpacing: 0.2)),
-    ]);
-  }
+            // Center Content
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFF0ECE1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.auto_awesome,
+                            size: 30,
+                            color: Color(0xFFD97706),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Upload notes, PDFs or enter a topic',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontFamily: 'Georgia',
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : AppColors.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Transform text or documents into animated video lessons and smart quizzes.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontFamily: 'Roboto',
+                            fontSize: 13,
+                            color: isDark ? const Color(0xFFA0A6C0) : AppColors.inkSoft,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
 
-  // ── Text input ────────────────────────────────────────────
-  Widget _buildTextInput() {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF6C63FF).withAlpha(70)),
-        boxShadow: [BoxShadow(color: const Color(0xFF6C63FF).withAlpha(15), blurRadius: 20, spreadRadius: 2)],
-      ),
-      child: TextField(
-        controller: _textCtrl, maxLines: 6,
-        style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.6),
-        decoration: InputDecoration(
-          hintText: 'Paste topic or educational content here...\n\ne.g. "Explain photosynthesis for students"',
-          hintStyle: TextStyle(color: Colors.white.withAlpha(35), fontSize: 13),
-          filled: true, fillColor: const Color(0xFF0C1020),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-          contentPadding: const EdgeInsets.all(18),
-        ),
-      ),
-    );
-  }
-
-  // ── Upload tile ───────────────────────────────────────────
-  Widget _buildUploadTile() {
-    final hasFile = _fileName != null;
-    final color = hasFile ? const Color(0xFF4ECDC4) : const Color(0xFF6C63FF);
-    return GestureDetector(
-      onTap: _pickFile,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-        decoration: BoxDecoration(
-          color: color.withAlpha(16),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withAlpha(80)),
-          boxShadow: [BoxShadow(color: color.withAlpha(20), blurRadius: 12)],
-        ),
-        child: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [color.withAlpha(160), color.withAlpha(80)]),
-              shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: color.withAlpha(80), blurRadius: 10)],
-            ),
-            child: Icon(hasFile ? Icons.check_circle_rounded : Icons.cloud_upload_rounded,
-                color: Colors.white, size: 20),
-          ),
-          const SizedBox(width: 14),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(hasFile ? _fileName! : 'Upload a Document',
-              style: TextStyle(color: hasFile ? color : Colors.white,
-                  fontWeight: FontWeight.w700, fontSize: 14),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 2),
-            Text(hasFile ? '${(_fileBytes!.length / 1024).toStringAsFixed(1)} KB  •  Tap to change'
-                : 'PDF, DOCX, PPTX, TXT, Images',
-              style: TextStyle(color: color.withAlpha(hasFile ? 180 : 120), fontSize: 11)),
-          ])),
-          if (hasFile)
-            GestureDetector(
-              onTap: () => setState(() { _fileBytes = null; _fileName = null; }),
-              child: Icon(Icons.close_rounded, color: Colors.white.withAlpha(80), size: 18))
-          else
-            Icon(Icons.chevron_right_rounded, color: color.withAlpha(150), size: 22),
-        ]),
-      ),
-    );
-  }
-
-  // ── Language picker ───────────────────────────────────────
-  Widget _buildLanguagePicker() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0C1020),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withAlpha(18)),
-      ),
-      child: DropdownButton<String>(
-        value: _lang, isExpanded: true,
-        dropdownColor: const Color(0xFF111827),
-        underline: const SizedBox(),
-        icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF6C63FF)),
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-        items: _langs.entries.map((e) =>
-          DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
-        onChanged: (v) => setState(() => _lang = v!),
-      ),
-    );
-  }
-
-  // ── Generate CTA ──────────────────────────────────────────
-  Widget _buildGenerateCTA() {
-    if (_loading || _pulseAnim == null) {
-      return Container(
-        height: 60, width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(8),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFF6C63FF).withAlpha(60)),
-        ),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          SizedBox(width: 20, height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2,
-                valueColor: const AlwaysStoppedAnimation(Color(0xFF6C63FF)))),
-          const SizedBox(width: 14),
-          Text(_status, style: const TextStyle(color: Colors.white60, fontSize: 14)),
-        ]),
-      );
-    }
-    return AnimatedBuilder(
-      animation: _pulseAnim!,
-      builder: (_, __) => Transform.scale(
-        scale: _pulseAnim!.value,
-        child: GestureDetector(
-          onTap: _generate,
-          child: Container(
-            height: 62, width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF6C63FF), Color(0xFF4361EE), Color(0xFF4ECDC4)],
-                begin: Alignment.centerLeft, end: Alignment.centerRight,
+                        // Quick suggestion pills
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.center,
+                          children: [
+                            _buildSuggestionChip('🌱 Photosynthesis', isDark),
+                            _buildSuggestionChip('⚡ Newton\'s Laws', isDark),
+                            _buildSuggestionChip('🧬 DNA Replication', isDark),
+                            _buildSuggestionChip('🪐 Solar System', isDark),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-              borderRadius: BorderRadius.circular(18),
-              boxShadow: [
-                BoxShadow(color: const Color(0xFF6C63FF).withAlpha(140),
-                    blurRadius: 28, spreadRadius: 2, offset: const Offset(0, 6)),
-                BoxShadow(color: const Color(0xFF4ECDC4).withAlpha(60),
-                    blurRadius: 14, spreadRadius: 0, offset: const Offset(0, 2)),
-              ],
             ),
-            child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.movie_creation_rounded, color: Colors.white, size: 24),
-              SizedBox(width: 12),
-              Text('Generate Video', style: TextStyle(
-                  color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 0.4)),
-              SizedBox(width: 10),
-              Icon(Icons.rocket_launch_rounded, color: Colors.white70, size: 16),
-            ]),
-          ),
+
+            // Bottom Prompt Container (Centred and constrained with safe bottom padding)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: cardColor,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: isDark ? Colors.white12 : const Color(0xFFE5E2D9),
+                      width: 1.2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.04),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_attachedFileName != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isDark ? Colors.white10 : const Color(0xFFEFEBE0),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.attach_file, size: 14),
+                                    const SizedBox(width: 4),
+                                    Text(_attachedFileName!, style: const TextStyle(fontSize: 12)),
+                                    const SizedBox(width: 4),
+                                    GestureDetector(
+                                      onTap: () => setState(() {
+                                        _attachedFileName = null;
+                                        _attachedFileBytes = null;
+                                      }),
+                                      child: const Icon(Icons.close, size: 14),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: TextField(
+                          controller: _promptController,
+                          maxLines: 4,
+                          minLines: 1,
+                          style: TextStyle(
+                            fontFamily: 'Roboto',
+                            fontSize: 15,
+                            color: isDark ? Colors.white : const Color(0xFF1E1E1E),
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Ask EduGenAI or enter topic...',
+                            hintStyle: TextStyle(
+                              fontFamily: 'Roboto',
+                              color: isDark ? Colors.white38 : const Color(0xFF9E9E9E),
+                            ),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                      ),
+
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                        child: Row(
+                          children: [
+                            // (+) Attachment icon
+                            IconButton(
+                              icon: Icon(
+                                Icons.add_circle_outline_rounded,
+                                size: 26,
+                                color: isDark ? Colors.white70 : const Color(0xFF444444),
+                              ),
+                              onPressed: () => _showAttachmentSheet(isDark),
+                            ),
+
+                            // ── Level Selector Chip ──
+                            GestureDetector(
+                              onTap: () => _showLevelPicker(isDark),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0xFF2C2C2C) : const Color(0xFFEFEBE0),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: isDark ? Colors.white10 : AppColors.border,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      _selectedLevelLabel,
+                                      style: TextStyle(
+                                        fontFamily: 'Roboto',
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: isDark ? Colors.white70 : const Color(0xFF444444),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      size: 16,
+                                      color: isDark ? Colors.white54 : const Color(0xFF666666),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(width: 6),
+
+                            // ── Language Selector Chip ──
+                            GestureDetector(
+                              onTap: () => _showLanguagePicker(isDark),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: _targetLanguage == 'en'
+                                      ? (isDark ? const Color(0xFF2C2C2C) : const Color(0xFFEFEBE0))
+                                      : (isDark ? const Color(0xFF1A2A1A) : const Color(0xFFE8F5E9)),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: _targetLanguage == 'en'
+                                        ? (isDark ? Colors.white10 : AppColors.border)
+                                        : const Color(0xFF4CAF50).withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      _targetLanguageLabel,
+                                      style: TextStyle(
+                                        fontFamily: 'Roboto',
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: _targetLanguage == 'en'
+                                            ? (isDark ? Colors.white70 : const Color(0xFF444444))
+                                            : const Color(0xFF2E7D32),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      size: 16,
+                                      color: _targetLanguage == 'en'
+                                          ? (isDark ? Colors.white54 : const Color(0xFF666666))
+                                          : const Color(0xFF2E7D32),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+
+                            const Spacer(),
+
+                            // Microphone Voice Button
+                            IconButton(
+                              icon: Icon(
+                                _isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
+                                size: 24,
+                                color: _isListening
+                                    ? Colors.redAccent
+                                    : (isDark ? Colors.white70 : const Color(0xFF444444)),
+                              ),
+                              onPressed: () {
+                                setState(() => _isListening = !_isListening);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      _isListening ? 'Listening...' : 'Voice input stopped',
+                                    ),
+                                    duration: const Duration(seconds: 1),
+                                  ),
+                                );
+                              },
+                            ),
+
+                            const SizedBox(width: 4),
+
+                            // Send / Generate Button
+                            GestureDetector(
+                              onTap: _sendPrompt,
+                              child: Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0xFF2563EB) : const Color(0xFF1D4ED8),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.check_rounded,
+                                  size: 22,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _label(String t) => Text(t, style: const TextStyle(
-      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15, letterSpacing: 0.2));
-}
-
-// ── Mesh / Aurora background painter ─────────────────────────
-class _BgPainter extends CustomPainter {
-  final double t;
-  _BgPainter(this.t);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    void drawOrb(double x, double y, double r, Color c) {
-      canvas.drawCircle(Offset(x, y), r, Paint()
-        ..shader = RadialGradient(colors: [c.withAlpha(80), Colors.transparent]).createShader(
-            Rect.fromCircle(center: Offset(x, y), radius: r)));
-    }
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
-        Paint()..color = const Color(0xFF06080F));
-    drawOrb(-40 + t * 30, -30 + t * 20, 220, const Color(0xFF6C63FF));
-    drawOrb(size.width + 30 - t * 20, 180 + t * 30, 180, const Color(0xFF4ECDC4));
-    drawOrb(size.width * 0.3 + t * 10, size.height * 0.7 - t * 15, 150, const Color(0xFF7B2FBE));
-    drawOrb(size.width * 0.8 + t * 5, size.height * 0.4 + t * 10, 120, const Color(0xFF06D6A0));
-
-    // Subtle grid lines
-    final gridPaint = Paint()..color = Colors.white.withAlpha(6)..strokeWidth = 0.5;
-    for (double i = 0; i < size.width; i += 60) {
-      canvas.drawLine(Offset(i, 0), Offset(i, size.height), gridPaint);
-    }
-    for (double j = 0; j < size.height; j += 60) {
-      canvas.drawLine(Offset(0, j), Offset(size.width, j), gridPaint);
-    }
+  Widget _buildSuggestionChip(String label, bool isDark) {
+    return ActionChip(
+      label: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 12,
+          color: isDark ? Colors.white70 : const Color(0xFF444444),
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      backgroundColor: isDark ? const Color(0xFF222222) : const Color(0xFFF3EFE6),
+      side: BorderSide(
+        color: isDark ? Colors.white10 : AppColors.border,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      onPressed: () {
+        final cleanText = label.replaceAll(RegExp(r'^[^\w]+'), '').trim();
+        _promptController.text = cleanText;
+      },
+    );
   }
 
-  @override
-  bool shouldRepaint(_BgPainter old) => old.t != t;
+  // ── Side Navigation Drawer ──
+  Widget _buildSketchDrawer(bool isDark) {
+    final user = AuthService.instance.currentUser;
+    final userName = user?.name ?? 'Learner';
+    final drawerBg = isDark ? const Color(0xFF1E1E1E) : const Color(0xFFF7F5EE);
+
+    return Drawer(
+      backgroundColor: drawerBg,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: const Color(0xFFD97706),
+                    child: Text(
+                      userName.isNotEmpty ? userName[0].toUpperCase() : 'L',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      userName,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                children: [
+                  _drawerTile(
+                    icon: Icons.video_collection_outlined,
+                    label: 'Text to Vid',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/result');
+                    },
+                  ),
+                  _drawerTile(
+                    icon: Icons.psychology_outlined,
+                    label: 'AI Tutor',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/tutor');
+                    },
+                  ),
+                  _drawerTile(
+                    icon: Icons.quiz_outlined,
+                    label: 'Quiz',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/quiz');
+                    },
+                  ),
+                  _drawerTile(
+                    icon: Icons.insights_outlined,
+                    label: 'Analytics',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/analytics');
+                    },
+                  ),
+                  _drawerTile(
+                    icon: Icons.history_edu_outlined,
+                    label: 'History',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/history');
+                    },
+                  ),
+                  const Divider(height: 24),
+                  _drawerTile(
+                    icon: Icons.settings_outlined,
+                    label: 'Settings',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/theme-selector');
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: ListTile(
+                leading: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+                title: const Text('Sign Out', style: TextStyle(color: Colors.redAccent)),
+                onTap: () async {
+                  await AuthService.instance.signOut();
+                  if (mounted) {
+                    Navigator.pushReplacementNamed(context, '/welcome');
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _drawerTile({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, size: 22, color: const Color(0xFF6B5E4D)),
+      title: Text(
+        label,
+        style: const TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onTap: onTap,
+    );
+  }
 }
