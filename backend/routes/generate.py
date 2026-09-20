@@ -5,6 +5,7 @@ Handles file uploads (text, image, PDF) and orchestrates all AI modules.
 """
 import logging
 import uuid
+from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional
 
@@ -116,7 +117,8 @@ async def full_pipeline(
     if not content.strip():
         raise HTTPException(400, "No text could be extracted from the input.")
 
-    logger.info(f"[{job_id}] Step 1 complete: Extracted {len(content)} chars via {input_type}")
+    print(f"\n🚀 [Job {job_id[:8]}] STARTING LESSON PIPELINE for '{content[:50]}...'", flush=True)
+    print(f"  ├─ [1/7] Extracted {len(content)} chars via {input_type}", flush=True)
 
     # ── Step 1.05: Knowledge Base & Wikipedia Research ────
     kb_result = await enrich_with_knowledge_base(content)
@@ -124,19 +126,19 @@ async def full_pipeline(
     wiki_data = kb_result.get("wikipedia_data") or {}
     research_context = wiki_data.get("research_context", "")
     if kb_result["was_enriched"]:
-        logger.info(f"[{job_id}] Step 1.05 complete: Enriched via {kb_result['source']}")
+        print(f"  ├─ [1.1/7] Enriched with Knowledge Base ({kb_result['source']})", flush=True)
 
     # ── Step 1.1: Content Filtering (Trained Model 🔥) ──────
     filter_result = await filter_content(enriched_content)
     filtered_text = filter_result["filtered_text"]
-    logger.info(f"[{job_id}] Step 1.1 complete: Filtered text ({filter_result['removed_ratio']*100:.1f}% noise removed)")
 
     # ── Step 1.2: Summarization (Trained Model 🔥) ──────────
     summary_result = await summarize_text(filtered_text)
     summarized_text = summary_result["summary"]
-    logger.info(f"[{job_id}] Step 1.2 complete: Summarized text ({summary_result['compression_ratio']*100:.1f}% compression)")
+    print(f"  ├─ [1.2/7] Summarized content ({summary_result['compression_ratio']*100:.0f}% compressed)", flush=True)
 
     # ── Step 2: Generate Dynamic Scenes (Groq Director) ───
+    print(f"  ├─ [2/7] Generating Lesson Storyboard ({learning_mode} mode)...", flush=True)
     language_name = SUPPORTED_LANGUAGES.get(target_language, "English")
     scenes = await generate_scenes(
         content=summarized_text,
@@ -144,9 +146,11 @@ async def full_pipeline(
         learning_mode=learning_mode,
         research_context=research_context,
     )
-    logger.info(f"[{job_id}] Step 2 complete: {scenes.get('total_scenes', len(scenes.get('scenes', [])))} dynamic scenes generated [{learning_mode}]")
+    total_scenes_cnt = scenes.get('total_scenes', len(scenes.get('scenes', [])))
+    print(f"  ├─ [2/7] Storyboard Ready: {total_scenes_cnt} scenes generated", flush=True)
 
     # ── Steps 2.1 + 3 in PARALLEL (quiz + emotions don't depend on each other)
+    print(f"  ├─ [3/7] Generating MCQ Quiz & Scene Emotion Detection...", flush=True)
     import asyncio as _asyncio
 
     quiz_data, scenes = await _asyncio.gather(
@@ -158,29 +162,37 @@ async def full_pipeline(
         ),
         detect_scene_emotions(scenes),   # returns updated scenes
     )
-    logger.info(f"[{job_id}] Steps 2.1+3 complete: quiz={quiz_data.get('total_questions',0)}q, emotions done")
+    print(f"  ├─ [3/7] Quiz & Emotion analysis complete ({quiz_data.get('total_questions', 0)} questions)", flush=True)
 
     # ── Step 4: Translate (if not English) ──────────────────
     if target_language != "en":
+        print(f"  ├─ [4/7] Translating narration to {language_name}...", flush=True)
         scenes = await translate_scenes(scenes, target_language)
-        logger.info(f"[{job_id}] Step 4 complete: Translated to {language_name}")
 
     # ── Step 5: Generate TTS Audio ──────────────────────────
+    print(f"  ├─ [5/7] Synthesizing AI Audio Narration (Edge TTS)...", flush=True)
     scenes = await generate_scene_audio(scenes, target_language)
-    logger.info(f"[{job_id}] Step 5 complete: Audio generated")
+    print(f"  ├─ [5/7] Narration audio generated for all scenes", flush=True)
 
     # ── Step 6: Generate Subtitles ──────────────────────────
     subtitle_result = await generate_subtitles(scenes)
-    logger.info(f"[{job_id}] Step 6 complete: {subtitle_result['total_entries']} subtitle entries")
+    print(f"  ├─ [6/7] Generated {subtitle_result['total_entries']} subtitle entries", flush=True)
 
     # ── Step 7: Generate Video ──────────────────────────────
     video_result = None
     if generate_video_flag:
+        print(f"  ├─ [7/7] 🎬 Rendering Animation & Video Frames (OpenCV + FFmpeg)...", flush=True)
         video_result = await generate_video(scenes, lang_code=target_language)
-        logger.info(f"[{job_id}] Step 7 complete: Video rendered ({video_result['duration']}s)")
+        print(f"  ├─ [7/7] ✅ Video rendering complete ({video_result['duration']}s duration in {video_result.get('render_time_s', 0)}s)", flush=True)
 
         # ── Step 7.1: Save to history & return share info ───
-        vid_record = save_video_record(
+        from services.s3_service import upload_video_to_s3
+        from config import VIDEO_DIR
+
+        local_vid_path = Path(video_result.get("filepath", VIDEO_DIR / video_result["filename"]))
+        cloud_url = await upload_video_to_s3(local_vid_path, video_result["filename"])
+
+        vid_record = await save_video_record(
             user_id=user_id,
             filename=video_result["filename"],
             title=scenes.get("title", "EduGenAI Video"),
@@ -189,10 +201,11 @@ async def full_pipeline(
             language=target_language,
             learning_mode=learning_mode,
             render_time=video_result.get("render_time_s", 0),
+            video_url=cloud_url,
         )
         video_result["video_record_id"] = vid_record["id"]
         video_result["share_token"] = vid_record["share_token"]
-        video_result["url"] = f"http://127.0.0.1:8000/videos/{video_result['filename']}"
+        video_result["url"] = cloud_url if cloud_url.startswith("http") else f"http://127.0.0.1:8000/videos/{video_result['filename']}"
         video_result["video_url"] = video_result["url"]
 
     # ── Step 7.2: Generate Comprehensive Text Article ────

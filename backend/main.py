@@ -29,14 +29,30 @@ logging.basicConfig(
 logger = logging.getLogger("EduGenAI")
 
 
+from db.database import init_db
+from db.migrate_json import migrate_legacy_data
+from services.cache import init_redis
+
+
 # ── Lifespan ────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Initializing Database connection and schema...")
+    try:
+        await init_db()
+        await migrate_legacy_data()
+    except Exception as e:
+        logger.error(f"Database initialization error: {e}")
+
+    # Initialize Redis Cache
+    try:
+        await init_redis()
+    except Exception as e:
+        logger.warning(f"Redis cache init: {e}")
+
     logger.info("Loading trained ML models...")
-
     status = load_all_models()
-
     logger.info(f"Model load status: {status}")
 
     yield
@@ -65,11 +81,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
 

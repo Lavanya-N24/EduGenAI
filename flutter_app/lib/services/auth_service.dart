@@ -115,6 +115,69 @@ class AuthService {
     }
   }
 
+  // ── Send Password Reset Email ──
+  Future<void> sendPasswordResetEmail(String email) async {
+    if (email.trim().isEmpty) {
+      throw Exception('Please enter your email address');
+    }
+    try {
+      await _auth.sendPasswordResetEmail(email: email.trim());
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'user-not-found':
+          throw Exception('No account found with this email address');
+        case 'invalid-email':
+          throw Exception('Please enter a valid email address');
+        default:
+          throw Exception(e.message ?? 'Failed to send reset email');
+      }
+    }
+  }
+
+  // ── Fetch User Profile from Firestore ──
+  Future<Map<String, dynamic>?> getUserProfileData() async {
+    final user = _auth.currentUser;
+    if (user == null) return null;
+    try {
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      if (doc.exists) return doc.data();
+    } catch (e) {
+      debugPrint('Error fetching user profile: $e');
+    }
+    return null;
+  }
+
+  // ── Change Password (email/password users only) ──
+  Future<void> updatePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('Not signed in');
+    if (user.email == null) throw Exception('No email associated with account');
+
+    // Re-authenticate first
+    final credential = EmailAuthProvider.credential(
+      email: user.email!,
+      password: oldPassword,
+    );
+    try {
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'wrong-password':
+          throw Exception('Current password is incorrect');
+        case 'weak-password':
+          throw Exception('New password is too weak (min 6 characters)');
+        case 'requires-recent-login':
+          throw Exception('Please sign out and sign in again before changing password');
+        default:
+          throw Exception(e.message ?? 'Password update failed');
+      }
+    }
+  }
+
   // ── Google Sign-In ──
   Future<AppUser?> signInWithGoogle() async {
     try {
@@ -124,7 +187,8 @@ class AuthService {
         final GoogleAuthProvider googleProvider = GoogleAuthProvider();
         googleProvider.addScope('email');
         googleProvider.addScope('profile');
-        googleProvider.setCustomParameters({'prompt': 'select_account'});
+        // No 'select_account' prompt — lets the browser reuse the active
+        // Google session so users don't have to re-enter their password every time.
         userCredential = await _auth.signInWithPopup(googleProvider);
       } else {
         final GoogleSignInAccount? googleUser = await _mobileGoogleSignIn.signIn();

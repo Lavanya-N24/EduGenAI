@@ -1177,9 +1177,11 @@ def _mux_scene_audio(
         cmd += ["-map", "0:v:0", "-an"]
 
     cmd += [
+        "-vf", "scale='min(1280,iw)':-2",   # cap at 720p to reduce RAM usage
         "-c:v", "libx264",
         "-preset", "veryfast",
-        "-crf", "21",
+        "-crf", "28",            # 28 vs 21: ~40% less RAM, still good quality
+        "-threads", "2",         # limit per-process threads to cap RAM per encoder
         "-pix_fmt", "yuv420p",
         "-t", str(duration),
         "-movflags", "+faststart",
@@ -1236,9 +1238,11 @@ def _overlay_sadtalker(
         ]
 
     cmd += [
+        "-vf", "scale='min(1280,iw)':-2",
         "-c:v", "libx264",
         "-preset", "veryfast",
-        "-crf", "21",
+        "-crf", "28",
+        "-threads", "2",
         "-pix_fmt", "yuv420p",
         "-t", str(duration),
         "-movflags", "+faststart",
@@ -1453,6 +1457,10 @@ async def generate_video(
     manim_count = 0
     avatar_count = 0
 
+    # Limit concurrent FFmpeg encoders to avoid OOM (libx264 malloc failures)
+    # Each libx264 instance needs ~150MB RAM; 2 concurrent is safe on most machines
+    _encode_semaphore = asyncio.Semaphore(2)
+
     try:
         total = len(scene_list)
 
@@ -1480,6 +1488,8 @@ async def generate_video(
                 tmp_dir,
                 f"scene_{idx:03d}.mp4",
             )
+
+            print(f"    ▶ Rendering Scene {idx+1}/{total}: '{scene.get('title', 'Scene')}' ({duration}s, visual={visual_type})...", flush=True)
 
             logger.info(
                 "🎬 Scene %d/%d | %s | %.1fs (Parallel)",
@@ -1583,9 +1593,15 @@ async def generate_video(
 
             return final_scene
 
-        # Render all scenes simultaneously in parallel across CPU cores!
+        # Render scenes with a semaphore to limit concurrent FFmpeg encoders.
+        # asyncio.gather still runs them "at once" from the event loop's view,
+        # but the semaphore caps how many actually encode at the same time.
+        async def _render_one_scene_guarded(idx: int, scene: dict) -> str:
+            async with _encode_semaphore:
+                return await _render_one_scene(idx, scene)
+
         scene_paths = await asyncio.gather(
-            *[_render_one_scene(idx, s) for idx, s in enumerate(scene_list)]
+            *[_render_one_scene_guarded(idx, s) for idx, s in enumerate(scene_list)]
         )
 
         # 5. Join scenes in the exact storyboard order.

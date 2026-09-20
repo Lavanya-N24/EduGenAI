@@ -33,7 +33,7 @@ async def create_share(req: ShareRequest):
     video_path = VIDEO_DIR / req.filename
     if not video_path.exists():
         raise HTTPException(404, f"Video '{req.filename}' not found on server.")
-    result = create_share_link(
+    result = await create_share_link(
         user_id=req.user_id,
         filename=req.filename,
         title=req.title,
@@ -46,7 +46,7 @@ async def create_share(req: ShareRequest):
 @router.get("/share/{token}")
 async def view_shared_video(token: str):
     """Return metadata for a shared video (anyone can call this)."""
-    record = get_shared_video(token)
+    record = await get_shared_video(token)
     if not record:
         raise HTTPException(404, "Share link not found or expired.")
     return record
@@ -56,7 +56,7 @@ async def view_shared_video(token: str):
 @router.get("/share/{token}/play")
 async def play_shared_video(token: str):
     """Redirect to the actual mp4 file."""
-    record = get_shared_video(token)
+    record = await get_shared_video(token)
     if not record:
         raise HTTPException(404, "Share link not found.")
     if not record.get("exists"):
@@ -68,7 +68,7 @@ async def play_shared_video(token: str):
 @router.get("/user/{user_id}/videos")
 async def get_video_history(user_id: str):
     """Return all generated videos for a user."""
-    videos = get_user_videos(user_id)
+    videos = await get_user_videos(user_id)
     return {
         "user_id": user_id,
         "total": len(videos),

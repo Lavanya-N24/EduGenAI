@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../main.dart' show AppColors;
 import '../services/auth_service.dart';
+import '../widgets/google_logo.dart';
+import '../services/google_one_tap_service.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -12,7 +14,34 @@ class WelcomeScreen extends StatefulWidget {
 class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isLoading = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // Trigger One Tap after the first frame so the widget tree is ready
+    WidgetsBinding.instance.addPostFrameCallback((_) => _triggerOneTap());
+  }
+
+  /// Shows the "Continue as [name]" One Tap popup.
+  /// If the user taps it we sign them in and navigate just like a normal
+  /// Google sign-in.
+  Future<void> _triggerOneTap() async {
+    final result = await GoogleOneTapService.instance.prompt();
+    if (result != null && mounted) {
+      final firebaseUser = result.user;
+      if (firebaseUser == null) return;
+      // Check if new user (no Firestore doc yet)
+      final appUser = AuthService.instance.currentUser;
+      if (appUser != null && result.additionalUserInfo?.isNewUser == true) {
+        Navigator.pushReplacementNamed(context, '/profile-setup');
+      } else {
+        Navigator.pushReplacementNamed(context, '/');
+      }
+    }
+  }
+
   Future<void> _handleGoogleSignIn() async {
+    // Cancel any pending One Tap prompt before opening the standard popup
+    GoogleOneTapService.instance.cancel();
     setState(() => _isLoading = true);
     try {
       final user = await AuthService.instance.signInWithGoogle();
@@ -150,10 +179,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                             height: 20,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD97706)),
                           )
-                        : Row(
+                        : const Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: const [
-                              _GoogleLogo(size: 20),
+                              GoogleLogoIcon(size: 22),
                               SizedBox(width: 12),
                               Text(
                                 'Continue with Google',
@@ -185,34 +214,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Google 4-Color Vector Logo Widget ─────────────────────────────────────────
-class _GoogleLogo extends StatelessWidget {
-  final double size;
-  const _GoogleLogo({this.size = 20});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        'G',
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: size * 0.85,
-          fontWeight: FontWeight.w900,
-          color: const Color(0xFF4285F4),
         ),
       ),
     );

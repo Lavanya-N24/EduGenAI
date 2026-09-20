@@ -1,0 +1,71 @@
+services:
+  # ── Python FastAPI Backend ──────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: edugenai-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/outputs:/app/outputs
+      - ./backend/uploads:/app/uploads
+      - ./backend/models:/app/models
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - edugenai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Redis In-Memory Cache & Task Queue ──────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: edugenai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - edugenai-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Flutter Web Frontend (Nginx) ───────────────────────────
+  frontend:
+    build:
+      context: ./flutter_app
+      dockerfile: Dockerfile
+    container_name: edugenai-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - edugenai-network
+
+# ── Shared Network & Volumes ──────────────────────────────────
+networks:
+  edugenai-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local

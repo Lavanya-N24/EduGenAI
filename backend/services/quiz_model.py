@@ -14,6 +14,9 @@ MAX_OUTPUT_TOKENS = 64
 NUM_BEAMS         = 4
 
 
+from services.cache import get_cached_json, set_cached_json, make_cache_key
+
+
 async def generate_quiz_from_model(
     content: str,
     num_questions: int = 5,
@@ -22,11 +25,24 @@ async def generate_quiz_from_model(
 ) -> dict:
     """
     Generate proper 4-option MCQ quiz questions.
-    Uses Groq LLM (with multi-model fallback) to generate rich, context-specific questions.
+    Uses Redis caching to deliver sub-millisecond responses on recurring topics.
     """
-    # Always use Groq LLM for proper 4-option MCQs with questions & explanations
-    logger.info(f"Generating {num_questions} {difficulty} quiz questions via Groq LLM for topic...")
-    return await _generate_with_groq(content, num_questions, difficulty, language)
+    # ── 1. Check Redis Cache ─────────────────────────────────
+    cache_key = make_cache_key("quiz", language, difficulty, str(num_questions), content[:100])
+    cached_quiz = await get_cached_json(cache_key)
+    if cached_quiz:
+        logger.info(f"⚡ Returning cached quiz for topic ({cache_key})")
+        return cached_quiz
+
+    # ── 2. Generate with LLM ─────────────────────────────────
+    logger.info(f"Generating {num_questions} {difficulty} quiz questions via Groq LLM...")
+    quiz = await _generate_with_groq(content, num_questions, difficulty, language)
+
+    # ── 3. Store in Cache ────────────────────────────────────
+    if quiz and quiz.get("questions"):
+        await set_cached_json(cache_key, quiz, ttl_seconds=86400)
+
+    return quiz
 
 
 def _normalize_quiz_data(quiz: dict, difficulty: str, fallback_title: str) -> dict:

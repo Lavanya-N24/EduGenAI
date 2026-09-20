@@ -29,8 +29,48 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>edugenai</title>
+  <title>EduGenAI</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Google Identity Services (One Tap) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>
+    // Called by the GIS SDK when the user picks an account in the One Tap prompt.
+    // We store the credential JWT so Dart can retrieve it via JS interop.
+    window._googleOneTapCredential = null;
+    window._googleOneTapCallback  = null;
+
+    function handleGoogleOneTapResponse(response) {
+      window._googleOneTapCredential = response.credential;
+      // If Dart already registered a callback, fire it immediately.
+      if (typeof window._googleOneTapCallback === 'function') {
+        window._googleOneTapCallback(response.credential);
+      }
+    }
+
+    // Called from Dart to initialise One Tap and show the prompt.
+    function initGoogleOneTap(clientId) {
+      if (!window.google || !window.google.accounts) {
+        console.warn('GIS not ready yet – retrying in 500 ms');
+        setTimeout(function() { initGoogleOneTap(clientId); }, 500);
+        return;
+      }
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleOneTapResponse,
+        auto_select: true,           // silently picks account if only one
+        cancel_on_tap_outside: false // keep prompt visible
+      });
+      google.accounts.id.prompt();   // show the "Continue as …" popup
+    }
+
+    // Called from Dart to cancel the One Tap prompt (e.g. user signs in another way).
+    function cancelGoogleOneTap() {
+      if (window.google && window.google.accounts) {
+        google.accounts.id.cancel();
+      }
+    }
+  </script>
 </head>
 <body>
   <!--

@@ -469,6 +469,14 @@ async def generate_scenes(
     # Keep enough source material for a real lesson.
     content = content[:2500]
 
+    # ── Redis Cache Check ────────────────────────────────────
+    from services.cache import get_cached_json, set_cached_json, make_cache_key
+    cache_key = make_cache_key("scenes", language, mode, content[:120])
+    cached_data = await get_cached_json(cache_key)
+    if cached_data and cached_data.get("scenes"):
+        logger.info("⚡ Returning cached lesson scenes for [%s]", content[:40])
+        return cached_data
+
     formatted_research = (
         f"\n--- BACKGROUND RESEARCH CONTEXT ---\n{research_context.strip()}\n-----------------------------------\n"
         if research_context.strip()
@@ -679,6 +687,9 @@ async def generate_scenes(
             "Untitled",
         ),
     )
+
+    if data and data.get("scenes"):
+        await set_cached_json(cache_key, data, ttl_seconds=86400)
 
     return data
 

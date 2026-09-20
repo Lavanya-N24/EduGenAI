@@ -16,8 +16,11 @@ from config import TESSERACT_PATH
 
 logger = logging.getLogger(__name__)
 
-# Set Tesseract path for Windows
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+import shutil
+
+# Set Tesseract path if specified and exists/in PATH
+if TESSERACT_PATH and (Path(TESSERACT_PATH).exists() or shutil.which(TESSERACT_PATH)):
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 
 def preprocess_image(image: Image.Image) -> Image.Image:

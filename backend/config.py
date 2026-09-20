@@ -31,16 +31,27 @@ PIXAZO_API_KEY = os.getenv("PIXAZO_API_KEY", "")
 PIXAZO_MODEL = os.getenv("PIXAZO_MODEL", "ltx-2-5-pro")
 VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", "pixazo").lower().strip()
 
+# ── Database & Cache ─────────────────────────────────────────
+_sqlite_path = str(MODELS_DIR / "edugenai.db").replace("\\", "/")
+DEFAULT_SQLITE_URL = f"sqlite+aiosqlite:///{_sqlite_path}"
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# ── AWS S3 Cloud Storage ─────────────────────────────────────
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+AWS_REGION = os.getenv("AWS_REGION", "ap-south-1").strip()
+AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "edugenai-media-storage").strip()
+AWS_CLOUDFRONT_DOMAIN = os.getenv("AWS_CLOUDFRONT_DOMAIN", "").strip()
+
 # ── Server ──────────────────────────────────────────────────
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
 # ── Tesseract OCR ──────────────────────────────────────────
-TESSERACT_PATH = os.getenv(
-    "TESSERACT_PATH",
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+_default_tesseract = "tesseract" if os.name != "nt" else r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+TESSERACT_PATH = os.getenv("TESSERACT_PATH", _default_tesseract)
 
 # ── Supported Languages ────────────────────────────────────
 SUPPORTED_LANGUAGES = {

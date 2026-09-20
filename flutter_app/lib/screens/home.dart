@@ -988,24 +988,56 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: const Color(0xFFD97706),
-                    child: Text(
-                      userName.isNotEmpty ? userName[0].toUpperCase() : 'L',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              child: InkWell(
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.pushNamed(context, '/profile-settings');
+                },
+                borderRadius: BorderRadius.circular(12),
+                child: Row(
+                  children: [
+                    Hero(
+                      tag: 'profile_avatar',
+                      child: CircleAvatar(
+                        backgroundColor: const Color(0xFFD97706),
+                        child: Text(
+                          userName.isNotEmpty ? userName[0].toUpperCase() : 'L',
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      userName,
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                      overflow: TextOverflow.ellipsis,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            userName,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 16),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            'View profile',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'Roboto',
+                              color: isDark
+                                  ? Colors.white38
+                                  : AppColors.inkFaint,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: isDark ? Colors.white24 : AppColors.inkFaint,
+                    ),
+                  ],
+                ),
               ),
             ),
             const Divider(height: 1),
@@ -1013,6 +1045,15 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 children: [
+                  // Profile tile
+                  _drawerTile(
+                    icon: Icons.manage_accounts_outlined,
+                    label: 'Profile',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, '/profile-settings');
+                    },
+                  ),
                   _drawerTile(
                     icon: Icons.video_collection_outlined,
                     label: 'Text to Vid',
@@ -1056,7 +1097,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Divider(height: 24),
                   _drawerTile(
                     icon: Icons.settings_outlined,
-                    label: 'Settings',
+                    label: 'Appearance',
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.pushNamed(context, '/theme-selector');

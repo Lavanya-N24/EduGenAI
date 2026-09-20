@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# Environment and secrets
+.env.local
+.env.*.local
+
+# Outputs & Temporary files
+outputs/video/*.mp4
+outputs/audio/*.mp3
+outputs/subtitles/*.srt
+uploads/*
+models/edugenai.db
+*.log
+
+# Git & IDE
+.git
+.gitignore
+.vscode/
+.idea/

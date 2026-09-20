@@ -13,6 +13,7 @@ import 'screens/quiz.dart';
 import 'screens/tutor.dart';
 import 'screens/analytics.dart';
 import 'screens/video_history.dart';
+import 'screens/profile_settings.dart';
 
 final themeController = ThemeController();
 
@@ -92,6 +93,7 @@ class EduGenAIApp extends StatelessWidget {
             '/tutor': (context) => const TutorScreen(),
             '/analytics': (context) => const AnalyticsScreen(),
             '/history': (context) => const VideoHistoryScreen(),
+            '/profile-settings': (context) => const ProfileSettingsScreen(),
           },
         );
       },
