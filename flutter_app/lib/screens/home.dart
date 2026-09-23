@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -342,67 +343,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Loading Dialog
+    // Loading Dialog with dynamic stage updates
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        return Center(
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 32),
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF222222) : Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: isDark ? Colors.white12 : AppColors.border,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: CircularProgressIndicator(
-                    color: Color(0xFFD97706),
-                    strokeWidth: 3,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Generating $_selectedLevelLabel Video...',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: 'Georgia',
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? Colors.white : AppColors.ink,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Synthesizing script, generating scenes, and rendering audio.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: 'Roboto',
-                    fontSize: 13,
-                    color: isDark ? const Color(0xFFA0A6C0) : AppColors.inkSoft,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (context) => _VideoGenerationProgressDialog(
+        levelLabel: _selectedLevelLabel,
+        languageLabel: _targetLanguageLabel,
+      ),
     );
 
     try {
@@ -1143,6 +1091,245 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       onTap: onTap,
+    );
+  }
+}
+
+class _VideoGenerationProgressDialog extends StatefulWidget {
+  final String levelLabel;
+  final String languageLabel;
+
+  const _VideoGenerationProgressDialog({
+    required this.levelLabel,
+    required this.languageLabel,
+  });
+
+  @override
+  State<_VideoGenerationProgressDialog> createState() => _VideoGenerationProgressDialogState();
+}
+
+class _VideoGenerationProgressDialogState extends State<_VideoGenerationProgressDialog> {
+  int _currentStepIndex = 0;
+  Timer? _stepTimer;
+  int _elapsedSeconds = 0;
+  Timer? _ticker;
+
+  final List<Map<String, dynamic>> _steps = [
+    {
+      'title': 'Researching Knowledge Base',
+      'subtitle': 'Analyzing concepts & encyclopedic context...',
+      'icon': Icons.menu_book_rounded,
+    },
+    {
+      'title': 'Generating AI Storyboard',
+      'subtitle': 'Structuring educational scenes & level pacing...',
+      'icon': Icons.auto_awesome_rounded,
+    },
+    {
+      'title': 'Translating Narration',
+      'subtitle': 'Adapting voiceover script into target language...',
+      'icon': Icons.translate_rounded,
+    },
+    {
+      'title': 'Synthesizing Neural Audio',
+      'subtitle': 'Rendering voice narration & timings...',
+      'icon': Icons.record_voice_over_rounded,
+    },
+    {
+      'title': 'Rendering Visual Animation',
+      'subtitle': 'Composing motion, equations & visual layouts...',
+      'icon': Icons.movie_filter_rounded,
+    },
+    {
+      'title': 'Finalizing Video Lesson',
+      'subtitle': 'Muxing high-definition stream & burning subtitles...',
+      'icon': Icons.check_circle_outline_rounded,
+    },
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        setState(() {
+          _elapsedSeconds++;
+        });
+      }
+    });
+
+    _stepTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (mounted) {
+        setState(() {
+          if (_currentStepIndex < _steps.length - 1) {
+            _currentStepIndex++;
+          }
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _stepTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final currentStep = _steps[_currentStepIndex];
+
+    return Center(
+      child: Container(
+        width: 380,
+        margin: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 26),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E1E26) : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: isDark ? const Color(0xFF2E2E3E) : const Color(0xFFE5E7EB),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 30,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header Badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD97706).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFFD97706),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${widget.levelLabel} • ${widget.languageLabel}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFD97706),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${_elapsedSeconds}s',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? const Color(0xFFA0A6C0) : const Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Step Icon with Glowing Background
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFD97706).withValues(alpha: 0.35),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  currentStep['icon'] as IconData,
+                  color: Colors.white,
+                  size: 32,
+                ),
+              ),
+              const SizedBox(height: 18),
+
+              // Title
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  currentStep['title'] as String,
+                  key: ValueKey<int>(_currentStepIndex),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Georgia',
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : AppColors.ink,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+
+              // Subtitle
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  currentStep['subtitle'] as String,
+                  key: ValueKey<String>(currentStep['subtitle'] as String),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Roboto',
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFFA0A6C0) : AppColors.inkSoft,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 22),
+
+              // Step indicator bar
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: (_currentStepIndex + 1) / _steps.length,
+                  minHeight: 6,
+                  backgroundColor: isDark ? const Color(0xFF2E2E3E) : const Color(0xFFE5E7EB),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFD97706)),
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              Text(
+                'Step ${_currentStepIndex + 1} of ${_steps.length}',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: isDark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
