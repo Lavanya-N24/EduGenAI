@@ -1169,20 +1169,15 @@ def _mux_scene_audio(
             "-i", str(audio_path),
             "-map", "0:v:0",
             "-map", "1:a:0",
+            "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "128k",
             "-shortest",
         ]
     else:
-        cmd += ["-map", "0:v:0", "-an"]
+        cmd += ["-map", "0:v:0", "-c:v", "copy", "-an"]
 
     cmd += [
-        "-vf", "scale='min(1280,iw)':-2",   # cap at 720p to reduce RAM usage
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "28",            # 28 vs 21: ~40% less RAM, still good quality
-        "-threads", "2",         # limit per-process threads to cap RAM per encoder
-        "-pix_fmt", "yuv420p",
         "-t", str(duration),
         "-movflags", "+faststart",
         output_path,
@@ -1332,8 +1327,9 @@ def _burn_final_subtitles(
             "-i", video_path,
             "-vf", vf,
             "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "20",
+            "-preset", "ultrafast",
+            "-crf", "22",
+            "-threads", "0",
             "-pix_fmt", "yuv420p",
             "-c:a", "copy",
             "-movflags", "+faststart",
@@ -1457,9 +1453,8 @@ async def generate_video(
     manim_count = 0
     avatar_count = 0
 
-    # Limit concurrent FFmpeg encoders to avoid OOM (libx264 malloc failures)
-    # Each libx264 instance needs ~150MB RAM; 2 concurrent is safe on most machines
-    _encode_semaphore = asyncio.Semaphore(2)
+    # Parallel scene rendering concurrency
+    _encode_semaphore = asyncio.Semaphore(max(4, os.cpu_count() or 4))
 
     try:
         total = len(scene_list)
