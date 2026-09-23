@@ -202,7 +202,7 @@ async def translate_text(
 
 async def translate_scenes(scenes: dict, target_lang: str) -> dict:
     """
-    Translate all narration text in scene data to the target language safely.
+    Translate all narration text in scene data to the target language safely in parallel.
     Only translates narration (what the voice says) and title.
     Visual descriptions stay in English for the video generator.
     """
@@ -210,28 +210,40 @@ async def translate_scenes(scenes: dict, target_lang: str) -> dict:
         return scenes
 
     try:
-        for scene in scenes.get("scenes", []):
-            # Translate narration
+        scene_list = scenes.get("scenes", [])
+
+        async def _translate_single_scene(scene: dict):
+            # Translate narration and title concurrently for each scene
+            coros = []
+            keys = []
             if scene.get("narration"):
-                narration_result = await translate_text(
-                    scene["narration"], target_lang
-                )
-                scene["original_narration"] = narration_result["original"]
-                scene["narration"] = narration_result["translated"]
-
-            # Translate title
+                coros.append(translate_text(scene["narration"], target_lang))
+                keys.append("narration")
             if scene.get("title"):
-                title_result = await translate_text(scene["title"], target_lang)
-                scene["original_title"] = title_result["original"]
-                scene["title"] = title_result["translated"]
+                coros.append(translate_text(scene["title"], target_lang))
+                keys.append("title")
 
-        # Translate video title
+            if coros:
+                results = await asyncio.gather(*coros)
+                for k, res in zip(keys, results):
+                    if k == "narration":
+                        scene["original_narration"] = res["original"]
+                        scene["narration"] = res["translated"]
+                    elif k == "title":
+                        scene["original_title"] = res["original"]
+                        scene["title"] = res["translated"]
+
+        tasks = [_translate_single_scene(s) for s in scene_list]
+
         if scenes.get("title"):
-            title_result = await translate_text(scenes["title"], target_lang)
-            scenes["original_title"] = title_result["original"]
-            scenes["title"] = title_result["translated"]
+            async def _translate_main_title():
+                res = await translate_text(scenes["title"], target_lang)
+                scenes["original_title"] = res["original"]
+                scenes["title"] = res["translated"]
+            tasks.append(_translate_main_title())
 
-        logger.info(f"Translated all scenes to {target_lang}")
+        await asyncio.gather(*tasks)
+        logger.info(f"Translated all {len(scene_list)} scenes to {target_lang} (parallel)")
         return scenes
 
     except Exception as e:
