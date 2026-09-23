@@ -5,8 +5,11 @@ echo   EduGenAI - AI Education Video Platform
 echo ==========================================
 echo.
 
+chcp 65001 > nul
+set PYTHONIOENCODING=utf-8
+
 echo [1/2] Starting FastAPI Backend on port 8000...
-start "EduGenAI Backend" cmd /k "cd /d ""%~dp0backend"" && py -m uvicorn main:app --host 0.0.0.0 --port 8000"
+start "EduGenAI Backend" cmd /k "chcp 65001 > nul && set PYTHONIOENCODING=utf-8 && cd /d ""%~dp0backend"" && (if exist venv\Scripts\activate.bat call venv\Scripts\activate.bat) && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
 
 echo [2/2] Waiting 8 seconds for backend to load...
 timeout /t 8 /nobreak > nul
