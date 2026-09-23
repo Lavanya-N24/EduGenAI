@@ -27,19 +27,18 @@ from config import GROQ_API_KEY, GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-# Active, verified Groq models for this environment
+# Active, verified fast Groq models
 _GROQ_MODELS = [
+    "qwen/qwen3.8-27b",
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
-    "qwen/qwen3.8-27b",
-    "qwen/qwen3.6-27b",
 ]
 
 # Active Google Gemini models
 _GEMINI_MODELS = [
     "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-flash-latest",
+    "gemini-3.5-flash",
 ]
 
 
@@ -48,11 +47,9 @@ def _sync_groq_call(messages: list, max_tokens: int, temperature: float, is_json
     client = Groq(api_key=GROQ_API_KEY)
     last_err = None
     kwargs = {
-        "max_tokens": min(max_tokens, 2500),
+        "max_tokens": min(max_tokens, 800),
         "temperature": temperature,
     }
-    if is_json:
-        kwargs["response_format"] = {"type": "json_object"}
 
     for model in _GROQ_MODELS:
         try:
@@ -61,7 +58,10 @@ def _sync_groq_call(messages: list, max_tokens: int, temperature: float, is_json
                 messages=messages,
                 **kwargs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            msg = response.choices[0].message
+            content = (msg.content or "").strip()
+            if not content and getattr(msg, "reasoning", None):
+                content = (msg.reasoning or "").strip()
             if not content:
                 raise ValueError(f"Model {model} returned empty content")
             logger.info("Groq model used successfully: %s", model)
@@ -117,11 +117,17 @@ async def _call_gemini(system_prompt: str, user_prompt: str, is_json: bool = Tru
 
 async def _call_llm(
     messages: list,
-    max_tokens: int = 3000,
+    max_tokens: int = 2500,
     temperature: float = 0.4,
     is_json: bool = True,
 ) -> str:
-    """Try Google Gemini 3.6 Flash first for high-speed reliability, then fallback to Groq."""
+    """Try ultra-fast Groq LPU first (<2s), then fallback to Google Gemini."""
+    if GROQ_API_KEY:
+        try:
+            return await _call_groq(messages, max_tokens=max_tokens, temperature=temperature, is_json=is_json)
+        except Exception as groq_err:
+            logger.warning("Groq failed (%s). Falling back to Gemini...", str(groq_err)[:120])
+
     if GEMINI_API_KEY:
         try:
             sys_msg = next((m.get("content", "") for m in messages if m.get("role") == "system"), "")
@@ -130,13 +136,7 @@ async def _call_llm(
             )
             return await _call_gemini(sys_msg, user_msg, is_json=is_json)
         except Exception as gem_err:
-            logger.warning("Gemini failed (%s). Falling back to Groq...", str(gem_err)[:120])
-
-    if GROQ_API_KEY:
-        try:
-            return await _call_groq(messages, max_tokens=max_tokens, temperature=temperature, is_json=is_json)
-        except Exception as groq_err:
-            logger.warning("Groq fallback also failed: %s", groq_err)
+            logger.warning("Gemini fallback also failed: %s", gem_err)
 
     raise RuntimeError("All LLM providers failed.")
 
@@ -285,9 +285,9 @@ _LEVEL_INSTRUCTIONS = {
 }
 
 _LEVEL_SCENE_COUNTS = {
-    "basic":    {"count": 6,  "min_secs": 60,  "words": "18-28"},
-    "beginner": {"count": 7,  "min_secs": 90,  "words": "28-40"},
-    "advanced": {"count": 10, "min_secs": 140, "words": "42-55"},
+    "basic":    {"count": 3,  "min_secs": 25,  "words": "16-25"},
+    "beginner": {"count": 4,  "min_secs": 36,  "words": "22-32"},
+    "advanced": {"count": 5,  "min_secs": 50,  "words": "30-45"},
 }
 
 
@@ -605,10 +605,8 @@ async def generate_scenes(
         scenes
     )
 
-    # ── Guarantee minimum 6 scenes ──────────────────────────────────────────────
-    # If the LLM returned too few scenes (e.g. truncated JSON), pad by expanding
-    # the narration of existing scenes into deeper follow-up scenes.
-    MIN_SCENES = 6
+    # ── Fast scene count check ────────────────────────────────────────────────
+    MIN_SCENES = 3
     if len(scenes) < MIN_SCENES:
         logger.warning(
             "LLM returned only %d scenes for '%s'. Retrying with strict count prompt...",
