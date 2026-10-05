@@ -51,7 +51,11 @@ DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
 # ── Tesseract OCR ──────────────────────────────────────────
 _default_tesseract = "tesseract" if os.name != "nt" else r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-TESSERACT_PATH = os.getenv("TESSERACT_PATH", _default_tesseract)
+_raw_tess = os.getenv("TESSERACT_PATH", _default_tesseract)
+if os.name != "nt" and ("\\" in _raw_tess or ":" in _raw_tess):
+    TESSERACT_PATH = "tesseract"
+else:
+    TESSERACT_PATH = _raw_tess
 
 # ── Supported Languages ────────────────────────────────────
 SUPPORTED_LANGUAGES = {
