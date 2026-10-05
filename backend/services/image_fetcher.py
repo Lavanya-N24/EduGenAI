@@ -53,6 +53,74 @@ REQUEST_TIMEOUT = 20
 # Helpers
 # ---------------------------------------------------------
 
+# Script regexes for multilingual Wikipedia lookup
+_SCRIPT_LANGS = [
+    (re.compile(r"[\u0C80-\u0CFF]"), "kn"),
+    (re.compile(r"[\u0900-\u097F]"), "hi"),
+    (re.compile(r"[\u0B80-\u0BFF]"), "ta"),
+    (re.compile(r"[\u0C00-\u0C7F]"), "te"),
+    (re.compile(r"[\u0D00-\u0D7F]"), "ml"),
+    (re.compile(r"[\u0980-\u09FF]"), "bn"),
+    (re.compile(r"[\u0A80-\u0AFF]"), "gu"),
+    (re.compile(r"[\u0A00-\u0A7F]"), "pa"),
+    (re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF]"), "ur"),
+    (re.compile(r"[\u3040-\u30FF\u4E00-\u9FFF]"), "ja"),
+]
+
+
+def _resolve_multilingual_topic(query: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Search native language Wikipedia (e.g. kn.wikipedia.org for Kannada,
+    hi.wikipedia.org for Hindi) to find:
+    1. An authentic local thumbnail image
+    2. The linked English Wikipedia article title for downstream searches
+    """
+    query_str = str(query or "").strip()
+    if not query_str:
+        return None, None
+
+    langs = []
+    for pattern, lang_code in _SCRIPT_LANGS:
+        if pattern.search(query_str):
+            langs.append(lang_code)
+            if lang_code == "hi":
+                langs.append("mr")
+            break
+
+    if not langs:
+        return None, None
+
+    for lang in langs:
+        url = (
+            f"https://{lang}.wikipedia.org/w/api.php"
+            f"?action=query&generator=search&gsrsearch={quote(query_str)}&gsrlimit=5"
+            f"&prop=pageimages|langlinks&lllang=en&pithumbsize=1200&format=json"
+        )
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": "EduGenAI-EducationalApp/2.0 (contact@edugenai.edu)"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                pages = resp.json().get("query", {}).get("pages", {})
+                ranked = sorted(pages.values(), key=lambda p: p.get("index", 99))
+                for p in ranked:
+                    thumb = p.get("thumbnail", {}).get("source")
+                    ll = p.get("langlinks", [])
+                    en_title = ll[0].get("*") if ll else None
+                    if thumb or en_title:
+                        logger.info(
+                            "✅ Multilingual Wikipedia hit (%s.wiki) for '%s': thumb=%s en_title='%s'",
+                            lang, query_str, bool(thumb), en_title,
+                        )
+                        return thumb, en_title
+        except Exception as e:
+            logger.warning("Multilingual Wikipedia lookup error (%s): %s", lang, e)
+
+    return None, None
+
+
 def _clean_query(query: str) -> str:
     """
     Clean and ensure an educational image query is in English for Pexels/Pixabay.
@@ -61,13 +129,19 @@ def _clean_query(query: str) -> str:
     if not query:
         return ""
 
-    # If query contains non-ASCII characters (e.g. Kannada, Hindi, etc.), translate to English
+    # If query contains non-ASCII characters (e.g. Kannada, Hindi, etc.), try multilingual Wiki or translator
     if any(ord(char) > 127 for char in query):
-        try:
-            from deep_translator import GoogleTranslator
-            query = GoogleTranslator(source="auto", target="en").translate(query)
-        except Exception:
-            pass
+        _, en_title = _resolve_multilingual_topic(query)
+        if en_title:
+            query = en_title
+        else:
+            try:
+                from deep_translator import GoogleTranslator
+                translated = GoogleTranslator(source="auto", target="en").translate(query)
+                if translated and not any(sig in translated.lower() for sig in ("error", "traffic", "<html")):
+                    query = translated
+            except Exception:
+                pass
 
     query = re.sub(
         r"[^a-zA-Z0-9\s,\-]",
@@ -291,17 +365,67 @@ def _search_pixabay(
 
 
 def _search_wikipedia_image(query: str) -> str | None:
-    """Search Wikimedia Commons for authentic educational images.
-    Uses namespace=6 (File:) search which directly matches photo file descriptions,
-    giving much higher relevance than Wikipedia article thumbnail lookup.
-    Falls back to Wikipedia pageimages with strict title-relevance filtering.
+    """Search for the most relevant educational image using Wikipedia/Wikimedia.
+
+    Strategy (in order):
+    0. Native language Wikipedia search (for Kannada, Hindi, Tamil, Telugu, etc.)
+    1. Direct Wikipedia article title lookup  — most accurate for named topics/people
+    2. Wikimedia Commons file search (namespace=6)
+    3. Wikipedia pageimages search with strict title matching (score >= 2)
     """
     try:
-        clean_q = _clean_query(query)
+        raw_query = str(query or "").strip()
+        # ── 0. Native Language Wikipedia search ──────────────────────────────
+        if any(ord(c) > 127 for c in raw_query):
+            local_thumb, en_title = _resolve_multilingual_topic(raw_query)
+            if local_thumb:
+                return local_thumb
+            if en_title:
+                clean_q = en_title
+            else:
+                clean_q = _clean_query(raw_query)
+        else:
+            clean_q = _clean_query(raw_query)
+
         if not clean_q:
             return None
 
-        # ── 1. Wikimedia Commons file search (namespace=6) ──────────────────
+        # ── 1. Direct Wikipedia article title lookup ─────────────────────────
+        # Most accurate: if query matches an exact article, get the right image.
+        # e.g. "Shivaji Maharaj warrior king" → tries "Shivaji Maharaj" → correct portrait
+        try:
+            title_candidates = [clean_q]
+            words = [w for w in clean_q.split() if len(w) > 3]
+            for i in range(len(words) - 1):
+                title_candidates.append(f"{words[i]} {words[i+1]}")
+
+            for title_try in title_candidates[:4]:
+                direct_url = (
+                    "https://en.wikipedia.org/w/api.php"
+                    f"?action=query&titles={quote(title_try)}"
+                    "&prop=pageimages&pithumbsize=1200&format=json"
+                )
+                resp_d = requests.get(
+                    direct_url,
+                    headers={"User-Agent": "EduGenAI-EducationalApp/2.0 (contact@edugenai.edu)"},
+                    timeout=6,
+                )
+                if resp_d.status_code == 200:
+                    pages_d = resp_d.json().get("query", {}).get("pages", {})
+                    for pid, p in pages_d.items():
+                        if pid == "-1":  # Article not found
+                            continue
+                        thumb = p.get("thumbnail", {}).get("source", "")
+                        if thumb:
+                            logger.info(
+                                "✅ Wikipedia direct title hit for '%s': article='%s'",
+                                clean_q, p.get("title", ""),
+                            )
+                            return thumb
+        except Exception as e:
+            logger.warning("Wikipedia direct title lookup error: %s", e)
+
+        # ── 2. Wikimedia Commons file search (namespace=6) ──────────────────
         # Searches actual image file names/descriptions → very accurate
         commons_url = (
             "https://commons.wikimedia.org/w/api.php"
@@ -375,9 +499,9 @@ def _search_wikipedia_image(query: str) -> str | None:
                     score = sum(1 for qw in query_words2 if qw in title_lower)
                     ranked.append((score, p.get("title", ""), thumb))
                 ranked.sort(reverse=True)
-                # Only accept if at least 1 query word appears in the article title
+                # Require at least 2 query words to avoid matching wrong people
                 for score, title, img_url in ranked:
-                    if score >= 1:
+                    if score >= 2:
                         logger.info(
                             "✅ Wikipedia pageimages hit for '%s': article='%s' score=%d",
                             clean_q, title, score,

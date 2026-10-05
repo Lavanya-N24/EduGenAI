@@ -6,6 +6,7 @@ ML Algorithm: Neural Machine Translation (NMT) using Transformer encoder-decoder
 Google Translate uses a sequence-to-sequence model with attention mechanism
 to translate between language pairs.
 """
+import asyncio
 import logging
 from deep_translator import GoogleTranslator
 
@@ -170,6 +171,7 @@ async def translate_text(
             chunks = _split_text(text_str, max_chunk)
             translated_chunks = []
             for chunk in chunks:
+                await asyncio.sleep(0.2)  # respect Google rate limit
                 t = GoogleTranslator(source=src, target=tgt).translate(chunk)
                 if t and not _is_error_response(t):
                     translated_chunks.append(t)
@@ -202,8 +204,7 @@ async def translate_text(
 
 async def translate_scenes(scenes: dict, target_lang: str) -> dict:
     """
-    Translate all narration text in scene data to the target language safely in parallel.
-    Only translates narration (what the voice says) and title.
+    Translate all narration text and titles in scene data to the target language efficiently.
     Visual descriptions stay in English for the video generator.
     """
     if target_lang == "en":
@@ -211,39 +212,96 @@ async def translate_scenes(scenes: dict, target_lang: str) -> dict:
 
     try:
         scene_list = scenes.get("scenes", [])
+        if not scene_list:
+            return scenes
 
-        async def _translate_single_scene(scene: dict):
-            # Translate narration and title concurrently for each scene
-            coros = []
-            keys = []
-            if scene.get("narration"):
-                coros.append(translate_text(scene["narration"], target_lang))
-                keys.append("narration")
-            if scene.get("title"):
-                coros.append(translate_text(scene["title"], target_lang))
-                keys.append("title")
+        lang_name = SUPPORTED_LANGUAGES.get(target_lang, target_lang)
+        src = "auto"
+        tgt = LANG_MAP.get(target_lang, target_lang)
 
-            if coros:
-                results = await asyncio.gather(*coros)
-                for k, res in zip(keys, results):
-                    if k == "narration":
-                        scene["original_narration"] = res["original"]
-                        scene["narration"] = res["translated"]
-                    elif k == "title":
-                        scene["original_title"] = res["original"]
-                        scene["title"] = res["translated"]
-
-        tasks = [_translate_single_scene(s) for s in scene_list]
+        # Collect all texts to translate
+        texts_to_translate = []
+        mapping = []
 
         if scenes.get("title"):
-            async def _translate_main_title():
-                res = await translate_text(scenes["title"], target_lang)
-                scenes["original_title"] = res["original"]
-                scenes["title"] = res["translated"]
-            tasks.append(_translate_main_title())
+            texts_to_translate.append(scenes["title"])
+            mapping.append(("main", "title", None))
 
-        await asyncio.gather(*tasks)
-        logger.info(f"Translated all {len(scene_list)} scenes to {target_lang} (parallel)")
+        for idx, s in enumerate(scene_list):
+            if s.get("title"):
+                texts_to_translate.append(s["title"])
+                mapping.append(("scene", "title", idx))
+            if s.get("narration"):
+                texts_to_translate.append(s["narration"])
+                mapping.append(("scene", "narration", idx))
+
+        translated_results = []
+
+        # 1. Attempt batch translation via GoogleTranslator
+        try:
+            await asyncio.sleep(0.3)  # rate-limit protection (Google: 5 req/sec)
+            translator = GoogleTranslator(source=src, target=tgt)
+            batch_res = translator.translate_batch(texts_to_translate)
+            if batch_res and len(batch_res) == len(texts_to_translate) and not any(_is_error_response(r or "") for r in batch_res):
+                translated_results = [r or "" for r in batch_res]
+        except Exception as e:
+            logger.warning("Batch Google translation error: %s", e)
+
+        # 2. Fallback to single batch LLM translation if Google fails
+        if not translated_results or len(translated_results) != len(texts_to_translate):
+            logger.info("Using single LLM batch translation for %d lines into %s...", len(texts_to_translate), lang_name)
+            try:
+                from services.llm import _call_llm
+                numbered_input = "\n".join([f"{i+1}. {t}" for i, t in enumerate(texts_to_translate)])
+                prompt = (
+                    f"Translate the following numbered educational sentences into natural, clear {lang_name}.\n"
+                    f"Maintain the exact numbering format ('1. ...', '2. ...'). Preserve technical terms, numbers, and proper names.\n\n"
+                    f"{numbered_input}"
+                )
+                llm_out = await _call_llm(
+                    messages=[
+                        {"role": "system", "content": f"You are a master translator translating into {lang_name}."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.2,
+                    is_json=False
+                )
+                # Parse numbered lines
+                lines = [l.strip() for l in (llm_out or "").split("\n") if l.strip()]
+                parsed = []
+                for l in lines:
+                    cleaned_line = re.sub(r"^\d+[\.\)]\s*", "", l).strip()
+                    if cleaned_line:
+                        parsed.append(cleaned_line)
+                if len(parsed) == len(texts_to_translate):
+                    translated_results = parsed
+                else:
+                    # Fallback individual calls if line count didn't match
+                    coros = [translate_text(t, target_lang) for t in texts_to_translate]
+                    res_objs = await asyncio.gather(*coros)
+                    translated_results = [r["translated"] for r in res_objs]
+            except Exception as llm_err:
+                logger.warning("LLM batch translation failed: %s", llm_err)
+                coros = [translate_text(t, target_lang) for t in texts_to_translate]
+                res_objs = await asyncio.gather(*coros)
+                translated_results = [r["translated"] for r in res_objs]
+
+        # Apply translated results
+        for (kind, field, idx), trans_text in zip(mapping, translated_results):
+            if kind == "main":
+                scenes["original_title"] = scenes.get("title", "")
+                scenes["title"] = trans_text
+            elif kind == "scene" and idx is not None:
+                s = scene_list[idx]
+                if field == "title":
+                    s["original_title"] = s.get("title", "")
+                    s["title"] = trans_text
+                elif field == "narration":
+                    s["original_narration"] = s.get("narration", "")
+                    s["narration"] = trans_text
+
+        logger.info(f"✅ Translated all {len(scene_list)} scenes to {lang_name} successfully")
         return scenes
 
     except Exception as e:

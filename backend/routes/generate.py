@@ -4,6 +4,7 @@ Main API endpoint for the complete content → video pipeline.
 Handles file uploads (text, image, PDF) and orchestrates all AI modules.
 """
 import logging
+import sys
 import uuid
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
@@ -33,6 +34,22 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/generate", tags=["Generate"])
+
+
+def _safe_print(*args, **kwargs):
+    """Safe print that won't crash on Windows when non-ASCII (Kannada, Hindi, etc.) text is output."""
+    try:
+        msg = " ".join(str(a) for a in args)
+        sys.stdout.write(msg + "\n")
+        sys.stdout.flush()
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        try:
+            msg = " ".join(str(a) for a in args)
+            safe_msg = msg.encode("ascii", errors="replace").decode("ascii")
+            sys.stdout.write(safe_msg + "\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
 
 
 @router.post("/full-pipeline", response_model=GenerateResponse)
@@ -117,8 +134,8 @@ async def full_pipeline(
     if not content.strip():
         raise HTTPException(400, "No text could be extracted from the input.")
 
-    print(f"\n🚀 [Job {job_id[:8]}] STARTING LESSON PIPELINE for '{content[:50]}...'", flush=True)
-    print(f"  ├─ [1/7] Extracted {len(content)} chars via {input_type}", flush=True)
+    print(f"\n\U0001f680 [Job {job_id[:8]}] STARTING LESSON PIPELINE for '{content[:50]}...'", flush=True)
+    _safe_print(f"  \u251c\u2500 [1/7] Extracted {len(content)} chars via {input_type}")
 
     # ── Step 1.05: Knowledge Base & Wikipedia Research ────
     kb_result = await enrich_with_knowledge_base(content)
@@ -126,7 +143,7 @@ async def full_pipeline(
     wiki_data = kb_result.get("wikipedia_data") or {}
     research_context = wiki_data.get("research_context", "")
     if kb_result["was_enriched"]:
-        print(f"  ├─ [1.1/7] Enriched with Knowledge Base ({kb_result['source']})", flush=True)
+        _safe_print(f"  \u251c\u2500 [1.1/7] Enriched with Knowledge Base ({kb_result['source']})")
 
     # ── Step 1.1: Content Filtering (Trained Model 🔥) ──────
     filter_result = await filter_content(enriched_content)
@@ -135,10 +152,10 @@ async def full_pipeline(
     # ── Step 1.2: Summarization (Trained Model 🔥) ──────────
     summary_result = await summarize_text(filtered_text)
     summarized_text = summary_result["summary"]
-    print(f"  ├─ [1.2/7] Summarized content ({summary_result['compression_ratio']*100:.0f}% compressed)", flush=True)
+    _safe_print(f"  \u251c\u2500 [1.2/7] Summarized content ({summary_result['compression_ratio']*100:.0f}% compressed)")
 
-    # ── Step 2: Generate Dynamic Scenes (Groq Director) ───
-    print(f"  ├─ [2/7] Generating Lesson Storyboard ({learning_mode} mode)...", flush=True)
+    # \u2500\u2500 Step 2: Generate Dynamic Scenes (Groq Director) \u2500\u2500\u2500
+    _safe_print(f"  \u251c\u2500 [2/7] Generating Lesson Storyboard ({learning_mode} mode)...")
     language_name = SUPPORTED_LANGUAGES.get(target_language, "English")
     scenes = await generate_scenes(
         content=summarized_text,
@@ -147,10 +164,10 @@ async def full_pipeline(
         research_context=research_context,
     )
     total_scenes_cnt = scenes.get('total_scenes', len(scenes.get('scenes', [])))
-    print(f"  ├─ [2/7] Storyboard Ready: {total_scenes_cnt} scenes generated", flush=True)
+    _safe_print(f"  \u251c\u2500 [2/7] Storyboard Ready: {total_scenes_cnt} scenes generated")
 
-    # ── Steps 2.1 + 3 in PARALLEL (quiz + emotions don't depend on each other)
-    print(f"  ├─ [3/7] Generating MCQ Quiz & Scene Emotion Detection...", flush=True)
+    # \u2500\u2500 Steps 2.1 + 3 in PARALLEL (quiz + emotions don't depend on each other)
+    _safe_print(f"  \u251c\u2500 [3/7] Generating MCQ Quiz & Scene Emotion Detection...")
     import asyncio as _asyncio
 
     quiz_data, scenes = await _asyncio.gather(
@@ -162,28 +179,30 @@ async def full_pipeline(
         ),
         detect_scene_emotions(scenes),   # returns updated scenes
     )
-    print(f"  ├─ [3/7] Quiz & Emotion analysis complete ({quiz_data.get('total_questions', 0)} questions)", flush=True)
+    _safe_print(f"  \u251c\u2500 [3/7] Quiz & Emotion analysis complete ({quiz_data.get('total_questions', 0)} questions)")
 
-    # ── Step 4: Translate (if not English) ──────────────────
+    # \u2500\u2500 Step 4: Translate (if not English) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    scenes["language"] = target_language
+    scenes["lang_code"] = target_language
     if target_language != "en":
-        print(f"  ├─ [4/7] Translating narration to {language_name}...", flush=True)
+        _safe_print(f"  \u251c\u2500 [4/7] Translating narration to {language_name}...")
         scenes = await translate_scenes(scenes, target_language)
 
-    # ── Step 5: Generate TTS Audio ──────────────────────────
-    print(f"  ├─ [5/7] Synthesizing AI Audio Narration (Edge TTS)...", flush=True)
+    # \u2500\u2500 Step 5: Generate TTS Audio \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    _safe_print(f"  \u251c\u2500 [5/7] Synthesizing AI Audio Narration (Edge TTS)...")
     scenes = await generate_scene_audio(scenes, target_language)
-    print(f"  ├─ [5/7] Narration audio generated for all scenes", flush=True)
+    _safe_print(f"  \u251c\u2500 [5/7] Narration audio generated for all scenes")
 
     # ── Step 6: Generate Subtitles ──────────────────────────
     subtitle_result = await generate_subtitles(scenes)
-    print(f"  ├─ [6/7] Generated {subtitle_result['total_entries']} subtitle entries", flush=True)
+    _safe_print(f"  \u251c\u2500 [6/7] Generated {subtitle_result['total_entries']} subtitle entries")
 
-    # ── Step 7: Generate Video ──────────────────────────────
+    # \u2500\u2500 Step 7: Generate Video \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     video_result = None
     if generate_video_flag:
-        print(f"  ├─ [7/7] 🎬 Rendering Animation & Video Frames (OpenCV + FFmpeg)...", flush=True)
+        _safe_print(f"  \u251c\u2500 [7/7] Rendering Animation & Video Frames (OpenCV + FFmpeg)...")
         video_result = await generate_video(scenes, lang_code=target_language)
-        print(f"  ├─ [7/7] ✅ Video rendering complete ({video_result['duration']}s duration in {video_result.get('render_time_s', 0)}s)", flush=True)
+        _safe_print(f"  \u251c\u2500 [7/7] Video rendering complete ({video_result['duration']}s duration in {video_result.get('render_time_s', 0)}s)")
 
         # ── Step 7.1: Save to history & return share info ───
         from services.s3_service import upload_video_to_s3

@@ -34,6 +34,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from services.text_renderer import draw_text_cv2, wrap_text, get_text_size
+
 
 WIDTH = 854
 HEIGHT = 480
@@ -1215,17 +1217,8 @@ def _render_documentary_slide(
         canvas[img_y1:img_y2, img_x1:img_x2] = panel
         cv2.rectangle(canvas, (img_x1, img_y1), (img_x2, img_y2), (40, 160, 230), 2, cv2.LINE_AA)
 
-    # ── 2. Render Text Content on the Left ──
-    pil_img = Image.fromarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(pil_img)
-
+    # ── 2. Render Text Content on the Left (with native complex script shaping) ──
     disp_title = (title or "Historical Overview").strip()
-
-    # Dynamic language-appropriate fonts
-    font_title = _get_font(20, is_bold=True, text=disp_title, lang_code=lang_code)
-    font_body  = _get_font(13, is_bold=False, text=narration, lang_code=lang_code)
-    # Badge is always English text — use a clean Latin font to avoid Indic font tofu boxes
-    font_badge = _get_font(11, is_bold=True, text="HISTORICAL CONTEXT", lang_code="en")
 
     # Historical Year / Period Detection
     full_text = f"{title} {narration}"
@@ -1245,69 +1238,46 @@ def _render_documentary_slide(
         badge_text = "HISTORICAL CONTEXT"
 
     # Year Badge Box
-    bbox_badge = draw.textbbox((0, 0), badge_text, font=font_badge)
-    badge_w = bbox_badge[2] - bbox_badge[0]
-    draw.rectangle([(28, int(h * 0.10)), (28 + badge_w + 18, int(h * 0.10) + 22)], fill=(217, 119, 6))
-    draw.text((36, int(h * 0.10) + 3), badge_text, font=font_badge, fill=(255, 255, 255))
+    badge_w, badge_h = get_text_size(badge_text, font_size=12, bold=True, lang_code="en")
+    bx1, by1 = 28, int(h * 0.10)
+    bx2, by2 = 28 + badge_w + 18, by1 + 22
+    cv2.rectangle(canvas, (bx1, by1), (bx2, by2), (6, 119, 217), -1)
+    draw_text_cv2(canvas, (bx1 + 8, by1 + 3), badge_text, font_size=12, color_bgr=(255, 255, 255), bold=True, lang_code="en")
 
-    # Scene Title — word-wrap constrained to left panel width so Marathi/Urdu never bleeds into image panel
+    # Scene Title — word-wrap constrained to left panel width
     max_title_w = int(w * 0.46) - 36
-    title_y = int(h * 0.18)
-    title_words = disp_title.split()
-    title_line = ""
-    for tw in title_words:
-        test = f"{title_line} {tw}".strip()
-        tbbox = draw.textbbox((0, 0), test, font=font_title)
-        if (tbbox[2] - tbbox[0]) > max_title_w and title_line:
-            draw.text((28, title_y), title_line, font=font_title, fill=(255, 255, 255))
-            title_y += 26
-            title_line = tw
-        else:
-            title_line = test
-    if title_line:
-        draw.text((28, title_y), title_line, font=font_title, fill=(255, 255, 255))
+    title_y = int(h * 0.17)
+    title_lines = wrap_text(disp_title, max_width=max_title_w, font_size=21, bold=True, lang_code=lang_code)
+    for t_line in title_lines[:2]:
+        draw_text_cv2(canvas, (28, title_y), t_line, font_size=21, color_bgr=(255, 255, 255), bold=True, lang_code=lang_code)
+        title_y += 28
 
     # Gold Accent Line
-    draw.line([(28, int(h * 0.25)), (int(w * 0.48), int(h * 0.25))], fill=(217, 140, 40), width=2)
+    accent_y = max(int(h * 0.25), title_y + 4)
+    cv2.line(canvas, (28, accent_y), (int(w * 0.48), accent_y), (40, 140, 217), 2, cv2.LINE_AA)
 
     # Bullet points from narration (splitting by English '.', Urdu '۔', Hindi '।', newlines, etc.)
     sentences = [s.strip() for s in re.split(r"[.۔।!?\n]+", str(narration or "")) if len(s.strip()) > 6]
     if not sentences and narration:
         sentences = [narration.strip()]
 
-    cur_y = int(h * 0.28)
+    cur_y = accent_y + 14
     max_text_w = int(w * 0.44) - 20
 
     for s in sentences[:3]:
         # Bullet dot
-        draw.ellipse([(28, cur_y + 4), (34, cur_y + 10)], fill=(217, 119, 6))
+        cv2.circle(canvas, (32, cur_y + 9), 4, (6, 119, 217), -1, cv2.LINE_AA)
 
-        # Dynamic word wrapping based on pixel width instead of arbitrary word counts
-        words = s.split()
-        lines: list[str] = []
-        cur_line = ""
-        for word in words:
-            test_line = f"{cur_line} {word}".strip()
-            bbox = draw.textbbox((0, 0), test_line, font=font_body)
-            if (bbox[2] - bbox[0]) > max_text_w and cur_line:
-                lines.append(cur_line)
-                cur_line = word
-            else:
-                cur_line = test_line
-        if cur_line:
-            lines.append(cur_line)
-
+        lines = wrap_text(s, max_width=max_text_w, font_size=15, bold=False, lang_code=lang_code)
         for line_idx, line_str in enumerate(lines[:2]):
             if line_idx == 1 and len(lines) > 2:
                 line_str += "..."
-            text_fill = (240, 245, 255) if line_idx == 0 else (200, 215, 235)
-            draw.text((42, cur_y), line_str, font=font_body, fill=text_fill)
-            cur_y += 20
+            color_bgr = (255, 245, 240) if line_idx == 0 else (235, 215, 200)
+            draw_text_cv2(canvas, (44, cur_y), line_str, font_size=15, color_bgr=color_bgr, bold=False, lang_code=lang_code)
+            cur_y += 22
         cur_y += 8
 
-    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-    frame[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    return canvas
 
 
 def _animate_equation_overlay(

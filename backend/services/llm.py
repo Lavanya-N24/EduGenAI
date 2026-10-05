@@ -27,18 +27,21 @@ from config import GROQ_API_KEY, GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-# Active, verified fast Groq models
+# Active, verified Groq models
+# NOTE: openai/gpt-oss-120b is a reasoning model that outputs thinking text
+# before JSON, causing parse failures. Use the standard model first.
 _GROQ_MODELS = [
+    "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b",
     "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
 ]
 
 # Active Google Gemini models
 _GEMINI_MODELS = [
-    "gemini-3.6-flash",
     "gemini-flash-latest",
     "gemini-3.5-flash",
+    "gemini-3.7-flash",
+    "gemini-flash-lite-latest",
 ]
 
 
@@ -47,7 +50,7 @@ def _sync_groq_call(messages: list, max_tokens: int, temperature: float, is_json
     client = Groq(api_key=GROQ_API_KEY)
     last_err = None
     kwargs = {
-        "max_tokens": min(max_tokens, 800),
+        "max_tokens": max_tokens,
         "temperature": temperature,
     }
 
@@ -60,6 +63,15 @@ def _sync_groq_call(messages: list, max_tokens: int, temperature: float, is_json
             )
             msg = response.choices[0].message
             content = (msg.content or "").strip()
+
+            # Reasoning models (e.g. openai/gpt-oss-120b) may output thinking text
+            # before the JSON. For JSON requests, extract only the JSON block.
+            if is_json and content:
+                first_brace = content.find("{")
+                last_brace = content.rfind("}")
+                if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                    content = content[first_brace:last_brace + 1]
+
             if not content and getattr(msg, "reasoning", None):
                 content = (msg.reasoning or "").strip()
             if not content:
@@ -117,14 +129,17 @@ async def _call_gemini(system_prompt: str, user_prompt: str, is_json: bool = Tru
 
 async def _call_llm(
     messages: list,
-    max_tokens: int = 2500,
+    max_tokens: int = 4000,
     temperature: float = 0.4,
     is_json: bool = True,
 ) -> str:
     """Try ultra-fast Groq LPU first (<2s), then fallback to Google Gemini."""
     if GROQ_API_KEY:
         try:
-            return await _call_groq(messages, max_tokens=max_tokens, temperature=temperature, is_json=is_json)
+            res = await _call_groq(messages, max_tokens=max_tokens, temperature=temperature, is_json=is_json)
+            if is_json:
+                _parse_json_robust(res)  # Verify parseable before returning
+            return res
         except Exception as groq_err:
             logger.warning("Groq failed (%s). Falling back to Gemini...", str(groq_err)[:120])
 
@@ -148,110 +163,38 @@ Your mission: Create a COMPLETE, logically flowing, age-appropriate educational 
 The lesson must feel like a real expert teacher walking a student through a topic step by step.
 
 ==================================================
-LEVEL-BASED NARRATION RULES (CRITICAL)
+LEVEL-BASED NARRATION RULES
 ==================================================
-The LEARNING MODE controls vocabulary, depth, and sentence complexity:
-
 📗 BASIC Mode (for children / absolute beginners):
-  - Use simple everyday words. No jargon at all.
-  - Use fun real-world analogies (e.g., "Roots are like straws that drink water").
-  - Narration: 18-28 words per scene. Short, punchy, memorable sentences.
-  - Scene count: 5-6 scenes. Total ~60-75 seconds.
+  - Simple everyday words, fun real-world analogies.
+  - Narration: 16-25 words per scene.
   - Tone: Friendly, wonder-filled, encouraging.
-  - NEVER mention formulas, technical terminology, or molecular detail.
 
 📘 BEGINNER Mode (school students, general learners):
-  - Use simple-to-moderate vocabulary with KEY scientific/technical terms defined.
-  - Introduce mechanisms clearly (how does it work? why does it happen?).
-  - Narration: 28-40 words per scene. Clear, natural, flowing sentences.
-  - Scene count: 6-8 scenes. Total ~80-120 seconds.
+  - Simple-to-moderate vocabulary with key terms defined.
+  - Explain mechanisms clearly (how it works, why it happens).
+  - Narration: 22-32 words per scene.
   - Tone: Curious, enthusiastic, educational.
-  - Light equations allowed (mention the formula once). No deep derivations.
 
-📕 ADVANCED Mode (college students, professionals, enthusiasts):
-  - Use precise scientific/technical language. Assume domain knowledge.
-  - Explain at molecular/atomic/algorithmic level.
-  - Narration: 40-55 words per scene. Rich detail, mechanisms, cause-and-effect chains.
-  - Scene count: 9-12 scenes. Total ~130-220 seconds.
+📕 ADVANCED Mode (university students, professionals):
+  - Precise scientific/technical terminology and mechanisms.
+  - Narration: 30-45 words per scene.
   - Tone: Professional, precise, analytical.
-  - Include equations, formulas, chemical/physics reactions, data structures.
-  - Explain WHY at a mechanistic level, not just WHAT.
 
 ==================================================
-UNIVERSAL PEDAGOGICAL SCENE FLOW (APPLY TO ALL TOPICS)
+PEDAGOGICAL SCENE FLOW
 ==================================================
-Every lesson MUST follow this 7-step flow. Adapt it to the topic:
-
-  Scene 1 → Hook & Introduction: Why does this matter? Real-world relevance. Big question.
-  Scene 2 → Core Concept / Definition: What is it? Simple definition with an analogy.
-  Scene 3 → Ingredient #1 / First Mechanism: First key component or step in the process.
-  Scene 4 → Ingredient #2 / Second Mechanism: Second key component or deeper mechanism.
-  Scene 5 → How They Work Together (The Process): The core interaction or process.
-  Scene 6 → Output / Result / Product: What comes out? What is produced or achieved?
-  Scene 7 → Real-World Impact / Summary: Why does this matter to humanity? Recap.
-  (Advanced adds: Scene 8-10 for equations, applications, future/research frontiers)
-
-Examples of correct flow mapping:
-
-  PHOTOSYNTHESIS:
-    1. Hook: Plants make their own food using sunlight!
-    2. Sunlight captured by green leaves / chlorophyll
-    3. Water absorbed through roots (xylem transport)
-    4. CO2 intake through stomata pores
-    5. Chloroplast: where the reaction happens (light+dark reactions)
-    6. Output: Glucose (energy) + Oxygen released
-    7. Equation 6CO2+6H2O→C6H12O6+6O2 + Summary
-
-  BLOCKCHAIN:
-    1. Hook: Can we trust the internet without a middleman?
-    2. What is a distributed ledger / decentralization?
-    3. How a block is created (transactions, hash, nonce)
-    4. How blocks are chained (cryptographic linking, SHA-256)
-    5. Mining & Consensus (how nodes agree on truth)
-    6. Smart Contracts: automated trustless code
-    7. Real-world uses: DeFi, NFT, supply chain + Summary
-
-  SOLAR SYSTEM:
-    1. Hook: Eight worlds orbiting one star — our cosmic home
-    2. The Sun: nuclear fusion, energy source, gravity anchor
-    3. Inner rocky planets: Mercury, Venus, Earth, Mars
-    4. The Asteroid Belt and outer gas giants
-    5. Jupiter, Saturn, Uranus, Neptune — comparative sizes
-    6. Moons, comets, dwarf planets, Kuiper belt
-    7. Gravity, Kepler’s laws, exploration history + Summary
-
-  DNA / GENETICS:
-    1. Hook: Every living thing carries a blueprint — DNA
-    2. Structure: double helix, base pairs (A-T, G-C)
-    3. Replication: how DNA copies itself before cell division
-    4. Transcription: DNA → mRNA
-    5. Translation: mRNA → Protein (ribosomes)
-    6. Mutations & Heredity: how traits are passed down
-    7. Applications: medicine, forensics, genetic engineering + Summary
-
-  HISTORICAL TOPICS (Biography / Events):
-    1. Hook: The time period and why it changed history
-    2. Background & Context: what was the world like before?
-    3. The Person / Event: key facts, dates, places
-    4. Key Actions or Turning Point: what did they do / what happened?
-    5. Challenges & Opposition: what obstacles were faced?
-    6. Outcome & Impact: what changed because of this?
-    7. Legacy: how does it still affect us today?
-
-==================================================
-CONCEPT-TO-CONCEPT TRANSITIONS
-==================================================
-Every scene must include a transition_explanation connecting it to the PREVIOUS scene.
-The video must feel like ONE continuous story, not separate bullet points.
+Adapt the scenes to the requested scene count:
+  - Scene 1: Hook & Introduction (why it matters).
+  - Middle Scenes: Core Concepts & Mechanisms step-by-step.
+  - Final Scene: Summary & real-world takeaway.
 
 ==================================================
 LANGUAGE RULES
 ==================================================
 - Narration MUST be in the TARGET LANGUAGE.
 - image_keywords and visual_description MUST ALWAYS be in ENGLISH.
-- Do NOT mix languages in a single field.
-
-Return ONLY valid JSON. No extra text, no markdown.
+- Return ONLY valid JSON starting with { and ending with }. Do NOT output reasoning or preamble.
 """
 
 
@@ -269,7 +212,7 @@ _LEVEL_INSTRUCTIONS = {
         "BEGINNER LEVEL — Write for a curious school/college student:\n"
         "- Use simple-to-moderate vocabulary. Introduce key terms and briefly define them.\n"
         "- Explain mechanisms clearly: how does it work, why does it happen?\n"
-        "- Narration: 28-40 words per scene. Clear, natural, flowing sentences.\n"
+        "- Narration: 22-32 words per scene. Clear, natural, flowing sentences.\n"
         "- You may mention 1 simple formula or equation. Do not derive it deeply.\n"
         "- Tone: Enthusiastic, educational, like a good YouTube explainer."
     ),
@@ -277,7 +220,7 @@ _LEVEL_INSTRUCTIONS = {
         "ADVANCED LEVEL — Write for university students or professionals:\n"
         "- Use precise scientific/technical language. Assume domain knowledge.\n"
         "- Explain at molecular/atomic/algorithmic/mathematical level. Include cause-and-effect chains.\n"
-        "- Narration: 42-55 words per scene. Detailed, analytical, precise.\n"
+        "- Narration: 30-45 words per scene. Detailed, analytical, precise.\n"
         "- Include relevant equations, chemical formulas, data structures, or theoretical models.\n"
         "- Explain WHY at a mechanistic level, not just WHAT.\n"
         "- Tone: Professional, precise, like a university lecture or research explainer."
@@ -331,7 +274,7 @@ Return ONLY this JSON (no extra text outside JSON):
       "scene_visual_type": "image",
       "emotion": "curious",
       "duration_seconds": 13,
-      "image_keywords": ["english keyword1", "english keyword2"],
+      "image_keywords": ["ExactPersonOrTopicName", "descriptive english keyword"],
       "actions": [],
       "equation": ""
     }}
@@ -345,7 +288,11 @@ Rules:
 - For image scenes: actions=[] and equation="".
 - For manim scenes: image_keywords=[].
 - scene_visual_type must be one of: image, manim, image+manim.
-- image_keywords and visual_description MUST ALWAYS BE IN ENGLISH.
+- image_keywords MUST ALWAYS BE IN ENGLISH. Use precise, searchable terms:
+  * For people: use their full name as the first keyword (e.g. "Shivaji", "Newton", "Marie Curie")
+  * For places: use the official English name (e.g. "Raigad Fort", "Amazon rainforest")
+  * For concepts: use standard scientific/educational terms (e.g. "photosynthesis diagram", "DNA double helix")
+- visual_description MUST ALWAYS BE IN ENGLISH.
 - Include transition_explanation and visual_continuity in every scene.
 - Return ONLY valid JSON, nothing else.
 """
@@ -369,6 +316,11 @@ def _parse_json_robust(raw: str) -> dict:
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text)
         text = text.strip()
+
+    # Find the starting brace of JSON to ignore preamble thoughts
+    first_brace = text.find("{")
+    if first_brace != -1:
+        text = text[first_brace:]
 
     # First attempt: direct json.loads
     try:

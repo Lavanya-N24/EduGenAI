@@ -129,6 +129,18 @@ def _is_rtl(lang_code: str) -> bool:
 
 
 def _draw_text(draw, xy, text, fill, font, rtl=False, max_width=860):
+    text_s = str(text or "")
+    if any(ord(c) > 127 for c in text_s) and hasattr(draw, "_image"):
+        from services.text_renderer import draw_text_pil, get_text_size
+        f_size = getattr(font, "size", 24)
+        if rtl:
+            tw, _ = get_text_size(text_s, font_size=f_size)
+            x = xy[0] + max_width - tw
+            draw_text_pil(draw._image, (x, xy[1]), text_s, font_size=f_size, fill=fill)
+        else:
+            draw_text_pil(draw._image, xy, text_s, font_size=f_size, fill=fill)
+        return
+
     if rtl:
         try:
             bbox = draw.textbbox((0, 0), text, font=font)
@@ -892,27 +904,23 @@ def _create_fallback_image(scene: dict, topic: str) -> str:
 
     draw.rectangle([50, 50, WIDTH - 50, HEIGHT - 50], outline=acc_color, width=3)
 
-    title = scene.get("title", topic)
-    try:
-        font_large = ImageFont.truetype("arial.ttf", 42)
-        font_sub = ImageFont.truetype("arial.ttf", 26)
-    except Exception:
-        font_large = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
+    from services.text_renderer import draw_text_cv2, wrap_text
 
-    draw.text((90, 90), f"Topic: {topic}", fill=acc_color, font=font_sub)
-    draw.text((90, 140), title[:60], fill=title_color, font=font_large)
+    frame_arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+    title = scene.get("title", topic)
+    draw_text_cv2(frame_arr, (90, 85), f"Topic: {topic}", font_size=24, color_bgr=acc_color[::-1], bold=True, lang_code=scene.get("lang_code", "en"))
+    draw_text_cv2(frame_arr, (90, 130), title[:60], font_size=36, color_bgr=title_color[::-1], bold=True, lang_code=scene.get("lang_code", "en"))
 
     narration = scene.get("narration", "")
     if narration:
-        words = narration.split()
-        lines = [" ".join(words[i:i+10]) for i in range(0, min(len(words), 30), 10)]
-        curr_y = 240
-        for line in lines:
-            draw.text((90, curr_y), line, fill=(230, 230, 240), font=font_sub)
-            curr_y += 36
+        lines = wrap_text(narration, max_width=WIDTH - 180, font_size=20, bold=False, lang_code=scene.get("lang_code", "en"))
+        curr_y = 230
+        for line in lines[:4]:
+            draw_text_cv2(frame_arr, (90, curr_y), line, font_size=20, color_bgr=(240, 230, 230), bold=False, lang_code=scene.get("lang_code", "en"))
+            curr_y += 34
 
-    img.save(fallback_path)
+    cv2.imwrite(str(fallback_path), frame_arr)
     return str(fallback_path)
 
 
@@ -922,32 +930,32 @@ async def _get_scene_image(scene: dict, topic: str) -> Optional[str]:
 
     queries = []
 
-    # 1. Collect English keywords from scene image_keywords (always in English per LLM prompt)
+    # 1. Collect keywords from scene image_keywords
     raw_kws = scene.get("image_keywords", [])
     if isinstance(raw_kws, list):
         for kw in raw_kws:
-            kw_s = re.sub(r"[^a-zA-Z0-9\s\-]", " ", str(kw)).strip()
-            if len(kw_s) >= 3 and not kw_s.lower().startswith("error"):
+            kw_s = re.sub(r"[^\w\s\-]", " ", str(kw), flags=re.UNICODE).strip()
+            if len(kw_s) >= 2 and not kw_s.lower().startswith("error"):
                 queries.append(kw_s)
 
-    # 2. Extract keywords from visual_description (which is always in English)
+    # 2. Extract keywords from visual_description
     vis_desc = str(scene.get("visual_description") or "").strip()
-    vis_clean = re.sub(r"[^a-zA-Z0-9\s\-]", " ", vis_desc).strip()
+    vis_clean = re.sub(r"[^\w\s\-]", " ", vis_desc, flags=re.UNICODE).strip()
     if vis_clean and len(vis_clean) >= 3 and not vis_clean.lower().startswith("error"):
         words = [w for w in vis_clean.split() if len(w) > 3 and w.lower() not in ("wide", "shot", "establishing", "scene", "view", "camera")]
         if words:
             queries.append(" ".join(words[:4]))
 
-    # 3. Clean topic
-    topic_clean = re.sub(r"[^a-zA-Z0-9\s\-]", " ", str(topic or "")).strip()
-    if len(topic_clean) >= 3 and not topic_clean.lower().startswith("error"):
+    # 3. Clean topic (preserve Kannada, Devanagari, etc.)
+    topic_clean = re.sub(r"[^\w\s\-]", " ", str(topic or ""), flags=re.UNICODE).strip()
+    if len(topic_clean) >= 2 and not topic_clean.lower().startswith("error"):
         queries.append(topic_clean)
 
     # De-duplicate while preserving order
     clean_queries = []
     for q in queries:
         q_norm = " ".join(q.split())
-        if q_norm and q_norm not in clean_queries and len(q_norm) >= 3:
+        if q_norm and q_norm not in clean_queries and len(q_norm) >= 2:
             clean_queries.append(q_norm)
 
     if not clean_queries:
@@ -1522,7 +1530,7 @@ async def generate_video(
                     image_path = None
 
                 eq = scene.get("equation") or (topic_equation if motion in ("photo_equation", "equation") else None)
-                lang = str(scenes.get("language", scenes.get("lang_code", scenes.get("lang", "en"))))
+                lang = lang_code or str(scenes.get("language", scenes.get("lang_code", scenes.get("lang", "en"))))
 
                 # Render scene in thread pool for multi-core parallel rendering
                 await asyncio.to_thread(
